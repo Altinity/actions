@@ -1,3 +1,5 @@
+DOCKER_IMAGE=$(echo "$DOCKER_IMAGE" | sed 's/[\/:]/_/g')
+
 tfs --no-colors transform nice raw.log nice.log.txt
 tfs --no-colors report results -a "https://s3.amazonaws.com/$S3_BUCKET/$PR_NUMBER/$COMMIT_SHA/grype/$DOCKER_IMAGE" raw.log - --copyright "Altinity LTD" | tfs --no-colors document convert > results.html
 
