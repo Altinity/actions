@@ -112,8 +112,8 @@ def get_regression_fails(client: Client, job_url: str):
                     job_name,
                     report_url as results_link
                FROM `gh-data`.clickhouse_regression_results
-               GROUP BY architecture, test_name, job_url, job_name, report_url, start_time
-               ORDER BY start_time DESC, length(test_name) DESC
+               GROUP BY architecture, test_name, job_url, job_name, report_url
+               ORDER BY length(test_name) DESC
             )
             WHERE job_url='{job_url}'
             AND status IN ('Fail', 'Error')
