@@ -20,7 +20,18 @@ import os
 s3 = boto3.client('s3')
 
 # Define the pattern to search for
-leaked_string_pattern = re.compile(r'[A-Z_]*(SECRET|PASSWORD)[A-Z_]*')
+leaked_string_pattern = re.compile(r"[A-Z_]*(SECRET|PASSWORD|ACCESS_KEY)[A-Z_]*")
+
+# Collection of additional strings to check for
+sensitive_strings = []
+
+
+def scan_env_vars():
+    """Scan environment variables for sensitive strings."""
+    for var_name, var_value in os.environ.items():
+        if leaked_string_pattern.match(var_name):
+            sensitive_strings.append(var_value)
+
 
 def scan_file(file_content, file_name):
     """Scan the content of a file for leaked strings."""
@@ -28,6 +39,9 @@ def scan_file(file_content, file_name):
     for line_number, line in enumerate(file_content.splitlines(), start=1):
         for match in leaked_string_pattern.finditer(line):
             matches.append((file_name, line_number, match.group(0)))
+        for secret_string in sensitive_strings:
+            if secret_string in line:
+                matches.append((file_name, line_number, f"{secret_string[:4]}..."))
     return matches
 
 def scan_tar_gz(file_content, package_name):
@@ -121,8 +135,11 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Scan an S3 bucket for leaked strings.')
     parser.add_argument('bucket_name', help='The name of the S3 bucket to scan')
     parser.add_argument('prefix', help='The prefix to restrict the scan to')
-    
+
     args = parser.parse_args()
+
+    # Scan environment variables
+    scan_env_vars()
 
     matches = scan_s3_bucket(args.bucket_name, args.prefix)
     if matches:
