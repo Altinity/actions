@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-This script scans an S3 bucket for leaked strings in various file types, including tar.gz, tgz, gz, zip, deb, and rpm files.
+This script scans an S3 bucket for leaked strings in various file types, including tar.gz, tgz, gz, zip, deb, rpm, and tar files.
 
 External dependencies:
 - dpkg-deb (for .deb files)
@@ -16,6 +16,7 @@ import io
 import argparse
 import subprocess
 import os
+import zstandard as zstd
 
 # Initialize S3 client
 s3 = boto3.client("s3")
@@ -114,6 +115,47 @@ def scan_rpm(file_content, package_name):
     return matches
 
 
+def scan_tar_zst(file_content, package_name):
+    """Scan the contents of a tar.zst archive for leaked strings."""
+    matches = []
+    dctx = zstd.ZstdDecompressor()
+    with dctx.stream_reader(io.BytesIO(file_content)) as reader:
+        with tarfile.open(fileobj=reader, mode="r|") as tar:
+            for member in tar.getmembers():
+                if member.isfile():
+                    f = tar.extractfile(member)
+                    if f:
+                        file_content = f.read().decode("utf-8", errors="ignore")
+                        matches.extend(
+                            scan_file(file_content, f"{package_name}/{member.name}")
+                        )
+    return matches
+
+
+def scan_zst(file_content, file_name):
+    """Scan the contents of a zst file for leaked strings."""
+    matches = []
+    dctx = zstd.ZstdDecompressor()
+    file_content = dctx.decompress(file_content).decode("utf-8", errors="ignore")
+    matches.extend(scan_file(file_content, file_name))
+    return matches
+
+
+def scan_tar(file_content, package_name):
+    """Scan the contents of a tar archive for leaked strings."""
+    matches = []
+    with tarfile.open(fileobj=io.BytesIO(file_content), mode="r:") as tar:
+        for member in tar.getmembers():
+            if member.isfile():
+                f = tar.extractfile(member)
+                if f:
+                    file_content = f.read().decode("utf-8", errors="ignore")
+                    matches.extend(
+                        scan_file(file_content, f"{package_name}/{member.name}")
+                    )
+    return matches
+
+
 def scan_s3_bucket(bucket_name, prefix):
     """Scan all files in an S3 bucket with the specified prefix for leaked strings."""
     matches = []
@@ -143,6 +185,12 @@ def scan_s3_bucket(bucket_name, prefix):
                 matches.extend(scan_deb(file_content, key))
             elif key.endswith(".rpm"):
                 matches.extend(scan_rpm(file_content, key))
+            elif key.endswith(".tar.zst"):
+                matches.extend(scan_tar_zst(file_content, key))
+            elif key.endswith(".zst"):
+                matches.extend(scan_zst(file_content, key))
+            elif key.endswith(".tar"):
+                matches.extend(scan_tar(file_content, key))
             else:
                 file_content = file_content.decode("utf-8", errors="ignore")
                 matches.extend(scan_file(file_content, key))
@@ -164,7 +212,6 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    # Scan environment variables
     scan_env_vars()
 
     matches = scan_s3_bucket(args.bucket_name, args.prefix)
