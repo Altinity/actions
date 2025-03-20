@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-This script scans an S3 bucket for leaked strings in various file types, including tar.gz, tgz, zip, deb, and rpm files.
+This script scans an S3 bucket for leaked strings in various file types, including tar.gz, tgz, gz, zip, deb, and rpm files.
 
 External dependencies:
 - dpkg-deb (for .deb files)
@@ -10,6 +10,7 @@ External dependencies:
 import boto3
 import tarfile
 import zipfile
+import gzip
 import re
 import io
 import argparse
@@ -57,6 +58,15 @@ def scan_tar_gz(file_content, package_name):
                     matches.extend(
                         scan_file(file_content, f"{package_name}/{member.name}")
                     )
+    return matches
+
+
+def scan_gz(file_content, file_name):
+    """Scan the contents of a gzipped file for leaked strings."""
+    matches = []
+    with gzip.GzipFile(fileobj=io.BytesIO(file_content)) as gz:
+        file_content = gz.read().decode("utf-8", errors="ignore")
+        matches.extend(scan_file(file_content, file_name))
     return matches
 
 
@@ -125,6 +135,8 @@ def scan_s3_bucket(bucket_name, prefix):
 
             if key.endswith((".tar.gz", ".tgz")):
                 matches.extend(scan_tar_gz(file_content, key))
+            elif key.endswith(".gz"):
+                matches.extend(scan_gz(file_content, key))
             elif key.endswith(".zip"):
                 matches.extend(scan_zip(file_content, key))
             elif key.endswith(".deb"):
