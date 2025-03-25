@@ -2,6 +2,10 @@
 """
 This script scans an S3 bucket for leaked strings in various file types, including tar.gz, tgz, gz, zip, deb, rpm, and tar files.
 
+Python dependencies:
+- boto3
+- zstandard (optional, for .zst files)
+
 External dependencies:
 - dpkg-deb (for .deb files)
 - rpm2cpio and cpio (for .rpm files)
@@ -28,7 +32,7 @@ except ImportError:
 s3 = boto3.client("s3")
 
 # Define the pattern to search for
-leaked_string_pattern = re.compile(r"[A-Z_]*(SECRET|PASSWORD|ACCESS_KEY)[A-Z_]*")
+leaked_string_pattern = re.compile(r"[A-Z_]*(SECRET|PASSWORD|ACCESS_KEY|TOKEN)[A-Z_]*")
 
 # Additional strings to check for
 sensitive_strings = []
