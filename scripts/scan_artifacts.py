@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-This script scans an S3 bucket for leaked strings in various file types, including tar.gz, tgz, gz, zip, deb, rpm, and tar files.
+This script scans an S3 bucket, files, or directories for leaked strings in various file types, including tar.gz, tgz, gz, zip, deb, rpm, and tar files.
 
 Python dependencies:
 - boto3
@@ -38,13 +38,26 @@ leaked_string_pattern = re.compile(r"[A-Z_]*(SECRET|PASSWORD|ACCESS_KEY|TOKEN)[A
 sensitive_strings = []
 
 
-class S3Scanner:
-    def __init__(self, bucket_name, prefix, env_secrets_only=False):
+class LeakScanner:
+    def __init__(self, bucket_name=None, prefix=None, env_secrets_only=False):
         self.bucket_name = bucket_name
         self.prefix = prefix
         self.matches = []
         self.continuation_token = None
         self.env_secrets_only = env_secrets_only
+
+        # Mapping of file extensions to their respective scanning functions
+        self.extension_to_scan_function = {
+            ".tar": self.scan_tar,
+            ".tar.gz": self.scan_tar_gz,
+            ".tgz": self.scan_tar_gz,
+            ".gz": self.scan_gz,
+            ".tar.zst": self.scan_tar_zst,
+            ".zst": self.scan_zst,
+            ".zip": self.scan_zip,
+            ".deb": self.scan_deb,
+            ".rpm": self.scan_rpm,
+        }
 
     def scan_env_vars(self):
         """Scan environment variables for sensitive strings."""
@@ -62,6 +75,49 @@ class S3Scanner:
             for secret_string in sensitive_strings:
                 if secret_string in line:
                     matches.append((file_name, line_number, f"{secret_string[:4]}..."))
+        return matches
+
+    def scan_local_file(self, file_path):
+        """Scan a single local file for leaked strings."""
+        matches = []
+        try:
+            # Check the file extension and use the appropriate scan function
+            for extension, scan_function in self.extension_to_scan_function.items():
+                if file_path.endswith(extension):
+                    with open(file_path, "rb") as f:
+                        file_content = f.read()
+                    matches.extend(scan_function(file_content, file_path))
+                    return matches
+
+            # If no special handling is required, scan as a plain text file
+            with open(file_path, "rb") as f:
+                file_content = f.read()
+            matches.extend(
+                self.scan_file(file_content.decode("utf-8", errors="ignore"), file_path)
+            )
+        except Exception as e:
+            print(f"Error reading file {file_path}: {e}")
+        return matches
+
+    def scan_local_directory(self, directory_path):
+        """Recursively scan a directory for leaked strings."""
+        matches = []
+        for root, _, files in os.walk(directory_path):
+            for file in files:
+                file_path = os.path.join(root, file)
+                matches.extend(self.scan_local_file(file_path))
+        return matches
+
+    def scan_paths(self, paths):
+        """Scan a list of files and directories for leaked strings."""
+        matches = []
+        for path in paths:
+            if os.path.isfile(path):
+                matches.extend(self.scan_local_file(path))
+            elif os.path.isdir(path):
+                matches.extend(self.scan_local_directory(path))
+            else:
+                print(f"Invalid path: {path}")
         return matches
 
     def scan_tar(self, file_content, package_name):
@@ -183,18 +239,6 @@ class S3Scanner:
 
     def scan_s3_bucket(self):
         """Scan all files in an S3 bucket with the specified prefix for leaked strings."""
-        extension_to_scan_function = {
-            ".tar": self.scan_tar,
-            ".tar.gz": self.scan_tar_gz,
-            ".tgz": self.scan_tar_gz,
-            ".gz": self.scan_gz,
-            ".tar.zst": self.scan_tar_zst,
-            ".zst": self.scan_zst,
-            ".zip": self.scan_zip,
-            ".deb": self.scan_deb,
-            ".rpm": self.scan_rpm,
-        }
-
         while True:
             if self.continuation_token:
                 response = s3.list_objects_v2(
@@ -213,7 +257,7 @@ class S3Scanner:
                 file_obj = s3.get_object(Bucket=self.bucket_name, Key=key)
                 file_content = file_obj["Body"].read()
 
-                for extension, scan_function in extension_to_scan_function.items():
+                for extension, scan_function in self.extension_to_scan_function.items():
                     if key.endswith(extension):
                         self.matches.extend(scan_function(file_content, key))
                         break
@@ -231,11 +275,34 @@ class S3Scanner:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Scan an S3 bucket for leaked strings."
+        description="Scan for leaked strings in S3 buckets or local files and directories."
     )
-    parser.add_argument("bucket_name", help="The name of the S3 bucket to scan")
-    parser.add_argument("prefix", help="The prefix to restrict the scan to")
-    parser.add_argument(
+    subparsers = parser.add_subparsers(
+        dest="mode", required=True, help="Mode of operation"
+    )
+
+    # Subcommand for S3 scanning
+    s3_parser = subparsers.add_parser(
+        "s3", help="Scan an S3 bucket for leaked strings."
+    )
+    s3_parser.add_argument("bucket_name", help="The name of the S3 bucket to scan")
+    s3_parser.add_argument("prefix", help="The prefix to restrict the scan to")
+    s3_parser.add_argument(
+        "--env-secrets-only",
+        action="store_true",
+        help="Only scan for leaked environment secrets",
+    )
+
+    # Subcommand for file and directory scanning
+    files_parser = subparsers.add_parser(
+        "files", help="Scan local files and directories for leaked strings."
+    )
+    files_parser.add_argument(
+        "paths",
+        nargs="+",
+        help="List of files and directories to scan for leaked strings",
+    )
+    files_parser.add_argument(
         "--env-secrets-only",
         action="store_true",
         help="Only scan for leaked environment secrets",
@@ -243,12 +310,23 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    scanner = S3Scanner(
-        args.bucket_name, args.prefix, env_secrets_only=args.env_secrets_only
-    )
-    scanner.scan_env_vars()
+    if args.mode == "s3":
+        # S3 scanning mode
+        scanner = LeakScanner(
+            bucket_name=args.bucket_name,
+            prefix=args.prefix,
+            env_secrets_only=args.env_secrets_only,
+        )
+        scanner.scan_env_vars()
+        matches = scanner.scan_s3_bucket()
 
-    matches = scanner.scan_s3_bucket()
+    elif args.mode == "files":
+        # File and directory scanning mode
+        scanner = LeakScanner(env_secrets_only=args.env_secrets_only)
+        scanner.scan_env_vars()
+        matches = scanner.scan_paths(args.paths)
+
+    # Output results
     if matches:
         print("Leaks found:")
         for file_name, line_number, match in matches:
