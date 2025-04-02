@@ -31,17 +31,18 @@ except ImportError:
 # Initialize S3 client
 s3 = boto3.client("s3")
 
-# Define the pattern to search for
-leaked_string_pattern = re.compile(r"[A-Z_]*(SECRET|PASSWORD|ACCESS_KEY|TOKEN)[A-Z_]*")
-
-# Additional strings to check for
-sensitive_strings = []
-
 
 class LeakScanner:
-    def __init__(self, bucket_name=None, prefix=None, env_secrets_only=False):
+
+    def __init__(
+        self, bucket_name=None, prefix=None, env_secrets_only=False, pattern=None
+    ):
         self.bucket_name = bucket_name
         self.prefix = prefix
+        self.pattern = re.compile(pattern) or re.compile(
+            r"[A-Z_]*(SECRET|PASSWORD|ACCESS_KEY|TOKEN)[A-Z_]*"
+        )
+        self.sensitive_strings = []
         self.matches = []
         self.continuation_token = None
         self.env_secrets_only = env_secrets_only
@@ -62,17 +63,17 @@ class LeakScanner:
     def scan_env_vars(self):
         """Scan environment variables for sensitive strings."""
         for var_name, var_value in os.environ.items():
-            if leaked_string_pattern.match(var_name):
-                sensitive_strings.append(var_value)
+            if self.pattern.match(var_name):
+                self.sensitive_strings.append(var_value)
 
     def scan_file(self, file_content, file_name):
         """Scan the content of a file for leaked strings."""
         matches = []
         for line_number, line in enumerate(file_content.splitlines(), start=1):
             if not self.env_secrets_only:
-                for match in leaked_string_pattern.finditer(line):
+                for match in self.pattern.finditer(line):
                     matches.append((file_name, line_number, match.group(0)))
-            for secret_string in sensitive_strings:
+            for secret_string in self.sensitive_strings:
                 if secret_string in line:
                     matches.append((file_name, line_number, f"{secret_string[:4]}..."))
         return matches
@@ -273,7 +274,21 @@ class LeakScanner:
         return self.matches
 
 
-if __name__ == "__main__":
+def parse_args():
+    def common_args(parser):
+        """Add common arguments to the parser."""
+        parser.add_argument(
+            "--env-secrets-only",
+            action="store_true",
+            help="Only scan for leaked environment secrets",
+        )
+        parser.add_argument(
+            "--pattern",
+            type=str,
+            default=None,
+            help="Regular expression pattern to match sensitive strings",
+        )
+
     parser = argparse.ArgumentParser(
         description="Scan for leaked strings in S3 buckets or local files and directories."
     )
@@ -287,11 +302,7 @@ if __name__ == "__main__":
     )
     s3_parser.add_argument("bucket_name", help="The name of the S3 bucket to scan")
     s3_parser.add_argument("prefix", help="The prefix to restrict the scan to")
-    s3_parser.add_argument(
-        "--env-secrets-only",
-        action="store_true",
-        help="Only scan for leaked environment secrets",
-    )
+    common_args(s3_parser)
 
     # Subcommand for file and directory scanning
     files_parser = subparsers.add_parser(
@@ -302,13 +313,13 @@ if __name__ == "__main__":
         nargs="+",
         help="List of files and directories to scan for leaked strings",
     )
-    files_parser.add_argument(
-        "--env-secrets-only",
-        action="store_true",
-        help="Only scan for leaked environment secrets",
-    )
+    common_args(files_parser)
 
-    args = parser.parse_args()
+    return parser.parse_args()
+
+
+if __name__ == "__main__":
+    args = parse_args()
 
     if args.mode == "s3":
         # S3 scanning mode
