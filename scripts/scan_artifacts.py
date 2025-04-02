@@ -39,8 +39,8 @@ class LeakScanner:
     ):
         self.bucket_name = bucket_name
         self.prefix = prefix
-        self.pattern = re.compile(pattern) or re.compile(
-            r"[A-Z_]*(SECRET|PASSWORD|ACCESS_KEY|TOKEN)[A-Z_]*"
+        self.pattern = re.compile(
+            pattern or r"[A-Z_]*(SECRET|PASSWORD|ACCESS_KEY|TOKEN)[A-Z_]*"
         )
         self.sensitive_strings = []
         self.matches = []
