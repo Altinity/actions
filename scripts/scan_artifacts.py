@@ -42,6 +42,8 @@ class LeakScanner:
         self.pattern = re.compile(
             pattern or r"[A-Z_]*(SECRET|PASSWORD|ACCESS_KEY|TOKEN)[A-Z_]*"
         )
+        print(self.pattern)
+        exit()
         self.sensitive_strings = []
         self.matches = []
         self.continuation_token = None
@@ -327,13 +329,17 @@ if __name__ == "__main__":
             bucket_name=args.bucket_name,
             prefix=args.prefix,
             env_secrets_only=args.env_secrets_only,
+            pattern=args.pattern,
         )
         scanner.scan_env_vars()
         matches = scanner.scan_s3_bucket()
 
     elif args.mode == "files":
         # File and directory scanning mode
-        scanner = LeakScanner(env_secrets_only=args.env_secrets_only)
+        scanner = LeakScanner(
+            env_secrets_only=args.env_secrets_only,
+            pattern=args.pattern,
+        )
         scanner.scan_env_vars()
         matches = scanner.scan_paths(args.paths)
 
