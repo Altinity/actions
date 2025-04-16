@@ -21,7 +21,7 @@ def docker_vulnerabilities(self):
         ):
             note(vulnerability)
             critical_levels = set(["HIGH", "CRITICAL"])
-            if vulnerability['vulnerability']["severity"] in critical_levels:
+            if vulnerability["vulnerability"]["severity"] in critical_levels:
                 with Then(
                     f"Found vulnerability of {vulnerability['vulnerability']['severity']} severity"
                 ):
