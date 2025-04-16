@@ -11,7 +11,7 @@ from typing import List, Tuple, Optional
 from urllib.parse import urlparse
 
 # Add the parent directory to Python path to find the lib module
-script_dir = Path(__file__).parent.absolute()
+script_dir = Path(__file__).absolute()
 parent_dir = script_dir.parent
 sys.path.append(str(parent_dir))
 
