@@ -177,9 +177,14 @@ class RebaseManager(GitCommandExecutor):
         """Validate the working directory state."""
         with Action("Validating working directory") as action:
             if not (self.work_dir / ".git").exists():
-                raise ValueError(
-                    "Not a git repository. Please run this script from a git repository."
-                )
+                response = input("Not a git repository. Would you like to do a clean clone of the fork repository? (y/n): ")
+                if response.lower() == 'y':
+                    self.clone_repository()
+                    return
+                else:
+                    raise ValueError(
+                        "Not a git repository. Please run this script from a git repository."
+                    )
 
             result = self.execute_git_command(["status", "--porcelain"])
             if result[1].strip():
