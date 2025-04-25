@@ -46,7 +46,6 @@ class DiffGenerator(GitCommandExecutor):
     def __init__(self, work_dir: Path, diff_dir: Path) -> None:
         super().__init__(work_dir)
         self.diff_dir = diff_dir
-        self.diff_dir.mkdir(exist_ok=True, parents=True)
 
     def generate_diff(self, base_ref: str, target_ref: str, output_file: str) -> None:
         """Generate a diff between two git references."""
@@ -70,6 +69,10 @@ class DiffGenerator(GitCommandExecutor):
             finally:
                 self.execute_git_command(["checkout", source_branch])
                 self.execute_git_command(["branch", "-D", temp_branch])
+
+    def ensure_diff_dir(self) -> None:
+        """Ensure the diff directory exists."""
+        self.diff_dir.mkdir(exist_ok=True, parents=True)
 
 
 class PatchApplier(GitCommandExecutor):
@@ -137,8 +140,11 @@ class RebaseManager(GitCommandExecutor):
         match = re.search(r"v([\d.]+(?:-[a-z]+)?)", tag)
         return match.group(1) if match else None
 
-    def is_directory_empty(self) -> bool:
-        """Check if the directory is empty or only contains hidden files."""
+    def is_directory_empty(self, missing_ok: bool = False) -> bool:
+        """Check if the directory doesn't exist or only contains hidden files."""
+        if not self.work_dir.exists():
+            return missing_ok
+
         with os.scandir(self.work_dir) as entries:
             return all(entry.name.startswith(".") for entry in entries)
 
@@ -205,9 +211,12 @@ class RebaseManager(GitCommandExecutor):
     def clone_repository(self) -> None:
         """Clone the fork repository if the directory is empty."""
         with Action("Cloning repository") as action:
-            if self.is_directory_empty():
+            if self.is_directory_empty(missing_ok=True):
                 action.note(f"Directory is empty, cloning {self.fork_repo}")
-                self.execute_git_command(["clone", self.fork_repo, "."])
+                self.execute_git_command(
+                    ["clone", self.fork_repo, self.work_dir.name],
+                    cwd=self.work_dir.parent,
+                )
                 self._setup_remote("upstream", self.upstream_repo, action)
                 self.execute_git_command(["checkout", self.custom_branch])
                 action.note(f"Checked out branch: {self.custom_branch}")
