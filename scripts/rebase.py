@@ -9,6 +9,7 @@ import re
 from pathlib import Path
 from typing import List, Tuple, Optional
 from urllib.parse import urlparse
+import shutil
 
 # Add the parent directory to Python path to find the lib module
 script_dir = Path(__file__).absolute()
@@ -199,18 +200,33 @@ class RebaseManager(GitCommandExecutor):
                         "Not a git repository. Please run this script from a git repository."
                     )
 
-            result = self.execute_git_command(["status", "--porcelain"])
+            # First check if diffs directory exists and has content
+            if (self.work_dir / "diffs").exists():
+                action.note("Previous 'diffs' directory found")
+                response = input(
+                    "Would you like to remove the previous diffs directory? (y/n): "
+                )
+                if response.lower() == "y":
+                    shutil.rmtree(self.work_dir / "diffs")
+                else:
+                    raise ValueError(
+                        "Please remove or backup the existing diffs directory"
+                    )
+
+            # Then check for tracked file changes only
+            result = self.execute_git_command(["diff", "--name-only"])
             if result[1].strip():
                 raise ValueError(
-                    "Working directory has uncommitted changes. Please commit or stash them first."
+                    "Working directory has uncommitted changes to tracked files. Please commit or stash them first."
                 )
 
             result = self.execute_git_command(["rev-parse", "--abbrev-ref", "HEAD"])
             current_branch = result[1].strip()
             if current_branch != self.custom_branch:
-                raise ValueError(
-                    f"Expected to be on branch '{self.custom_branch}', but on '{current_branch}'"
+                action.note(
+                    f"Switching from '{current_branch}' to '{self.custom_branch}'"
                 )
+                self.execute_git_command(["checkout", self.custom_branch])
 
             self._handle_remote("origin", self.fork_repo, action)
             self._handle_remote("upstream", self.upstream_repo, action)
