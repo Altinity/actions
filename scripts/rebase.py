@@ -51,8 +51,15 @@ class DiffGenerator(GitCommandExecutor):
         """Generate a diff between two git references."""
         with Action(f"Generating diff {output_file}") as action:
             diff_file = self.diff_dir / f"{output_file}.patch"
+            self.ensure_diff_dir()
+            # Use format-patch with output directory and name the patch file directly
             self.execute_git_command(
-                ["diff", base_ref, target_ref, "--output", str(diff_file)]
+                [
+                    "format-patch",
+                    "--output",
+                    str(diff_file),
+                    f"{base_ref}..{target_ref}",
+                ]
             )
             action.note(f"Generated diff file: {diff_file}")
 
@@ -230,10 +237,18 @@ class RebaseManager(GitCommandExecutor):
             self.validate_working_directory()
             self._setup_remote("upstream", self.upstream_repo, action)
             self.execute_git_command(
-                ["fetch", "upstream", f"refs/tags/{self.upstream_base_tag}"]
+                [
+                    "fetch",
+                    "upstream",
+                    f"refs/tags/{self.upstream_base_tag}:refs/tags/{self.upstream_base_tag}",
+                ]
             )
             self.execute_git_command(
-                ["fetch", "upstream", f"refs/tags/{self.upstream_new_tag}"]
+                [
+                    "fetch",
+                    "upstream",
+                    f"refs/tags/{self.upstream_new_tag}:refs/tags/{self.upstream_new_tag}",
+                ]
             )
 
     def generate_custom_base_diff(self) -> None:
