@@ -51,9 +51,8 @@ class DiffGenerator(GitCommandExecutor):
     def generate_diff(self, base_ref: str, target_ref: str, output_file: str) -> None:
         """Generate a diff between two git references."""
         with Action(f"Generating diff {output_file}") as action:
-            diff_file = self.diff_dir / f"{output_file}.patch"
             self.ensure_diff_dir()
-            # Use format-patch with output directory and name the patch file directly
+            diff_file = self.diff_dir / f"{output_file}.patch"
             self.execute_git_command(
                 [
                     "format-patch",
@@ -63,6 +62,33 @@ class DiffGenerator(GitCommandExecutor):
                 ]
             )
             action.note(f"Generated diff file: {diff_file}")
+
+    def generate_per_file_diffs(
+        self, base_ref: str, target_ref: str, prefix: str = "custom_"
+    ) -> None:
+        """Generate per-file diffs between two git references."""
+        with Action(
+            f"Generating per-file diffs between {base_ref} and {target_ref}"
+        ) as action:
+            self.ensure_diff_dir()
+            # Get list of changed files
+            result = self.execute_git_command(
+                ["diff", "--name-only", base_ref, target_ref]
+            )
+            changed_files = [
+                line.strip() for line in result[1].splitlines() if line.strip()
+            ]
+            if not changed_files:
+                action.note("No changes detected between references.")
+                return
+            for file in changed_files:
+                patch_file = self.diff_dir / f"{prefix}{file.replace('/', '_')}.patch"
+                diff_result = self.execute_git_command(
+                    ["diff", base_ref, target_ref, "--", file]
+                )
+                with open(patch_file, "w") as f:
+                    f.write(diff_result[1])
+                action.note(f"Generated patch for {file}: {patch_file}")
 
     def generate_temp_branch_diff(
         self, base_ref: str, source_branch: str, output_file: str
@@ -268,13 +294,10 @@ class RebaseManager(GitCommandExecutor):
             )
 
     def generate_custom_base_diff(self) -> None:
-        """Generate diff between custom branch and base tag."""
-        with Action("Generating custom branch vs base diff") as action:
-            self.diff_generator.generate_temp_branch_diff(
-                f"refs/tags/{self.upstream_base_tag}",
-                self.custom_branch,
-                "custom_vs_base",
-            )
+        """Generate per-file diffs between custom branch and base tag."""
+        self.diff_generator.generate_per_file_diffs(
+            f"refs/tags/{self.upstream_base_tag}", self.custom_branch, prefix="custom_"
+        )
 
     def generate_upstream_base_diff(self) -> None:
         """Generate diff between upstream tags."""
