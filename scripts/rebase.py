@@ -7,7 +7,7 @@ import logging
 import subprocess
 import re
 from pathlib import Path
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Dict
 from urllib.parse import urlparse
 import shutil
 
@@ -38,7 +38,7 @@ class GitCommandExecutor:
             action.note(f"Exit code: {result.returncode}")
             if result.stderr:
                 action.note(f"stderr: {result.stderr}")
-            return result.returncode, result.stdout
+            return result.returncode, result.stdout, result.stderr
 
 
 class DiffGenerator(GitCommandExecutor):
@@ -47,6 +47,7 @@ class DiffGenerator(GitCommandExecutor):
     def __init__(self, work_dir: Path, diff_dir: Path) -> None:
         super().__init__(work_dir)
         self.diff_dir = diff_dir
+        self.patch_to_file: Dict[str, str] = {}  # Maps patch filenames to source files
 
     def generate_diff(self, base_ref: str, target_ref: str, output_file: str) -> None:
         """Generate a diff between two git references."""
@@ -89,6 +90,8 @@ class DiffGenerator(GitCommandExecutor):
                 with open(patch_file, "w") as f:
                     f.write(diff_result[1])
                 action.note(f"Generated patch for {file}: {patch_file}")
+                # Store the mapping between patch filename and source file
+                self.patch_to_file[patch_file] = file
 
     def generate_temp_branch_diff(
         self, base_ref: str, source_branch: str, output_file: str
@@ -115,7 +118,9 @@ class PatchApplier(GitCommandExecutor):
     def __init__(self, work_dir: Path, diff_dir: Path) -> None:
         super().__init__(work_dir)
         self.diff_dir = diff_dir
-        self.conflict_files: List[str] = []
+        self.failing_patches: List[Path] = (
+            []
+        )  # List of patch files that failed to apply
 
     def apply_patch(self, patch_file: Path) -> None:
         """Apply a patch file and handle conflicts."""
@@ -126,14 +131,20 @@ class PatchApplier(GitCommandExecutor):
                 self.execute_git_command(["apply", str(patch_file)])
             else:
                 action.note("Conflict detected, marking for manual resolution")
-                self.conflict_files.append(patch_file.stem.replace("custom_", ""))
+                self.failing_patches.append(patch_file)
 
-    def apply_changes(self, new_branch: str) -> None:
+    def apply_changes(
+        self, new_branch: str, upstream_base_tag: str, upstream_new_tag: str
+    ) -> None:
         """Apply all custom patches to the new branch."""
         with Action("Applying changes to new branch") as action:
             for diff_file in self.diff_dir.glob("custom_*.patch"):
                 self.apply_patch(diff_file)
-            action.note(f"Changes applied to branch: {new_branch}")
+
+            if self.failing_patches:
+                action.note("Conflicts detected.")
+            else:
+                action.note(f"Changes applied to branch: {new_branch}")
 
 
 class RebaseManager(GitCommandExecutor):
@@ -217,8 +228,10 @@ class RebaseManager(GitCommandExecutor):
         """Validate the working directory state."""
         with Action("Validating working directory") as action:
             if not (self.work_dir / ".git").exists():
-                response = input("Not a git repository. Would you like to do a clean clone of the fork repository? (y/n): ")
-                if response.lower() == 'y':
+                response = input(
+                    "Not a git repository. Would you like to do a clean clone of the fork repository? (y/n): "
+                )
+                if response.lower() == "y":
                     self.clone_repository()
                     return
                 else:
@@ -318,7 +331,9 @@ class RebaseManager(GitCommandExecutor):
 
     def apply_changes(self, new_branch: str) -> None:
         """Apply changes to the new branch."""
-        self.patch_applier.apply_changes(new_branch)
+        self.patch_applier.apply_changes(
+            new_branch, self.upstream_base_tag, self.upstream_new_tag
+        )
 
 
 def parse_args() -> argparse.Namespace:
@@ -384,12 +399,33 @@ def main() -> None:
         new_branch = rebase_manager.create_new_branch()
         rebase_manager.apply_changes(new_branch)
 
-        if rebase_manager.patch_applier.conflict_files:
+        if rebase_manager.patch_applier.failing_patches:
             action.note("The following files need manual conflict resolution:")
-            for file in rebase_manager.patch_applier.conflict_files:
-                action.note(f"  - {file}")
-            action.note("Use 'meld' to resolve conflicts:")
-            action.note(f"meld <base> <upstream> <custom>")
+            for patch_file in rebase_manager.patch_applier.failing_patches:
+                file_path = rebase_manager.diff_generator.patch_to_file.get(
+                    patch_file, patch_file
+                )
+                action.note(f"  - {file_path}")
+
+            action.note("")
+            action.note("To resolve conflicts:")
+            action.note(
+                "1. For each conflicting file, you need to manually edit the file"
+            )
+            action.note("2. Compare the original file with the patch:")
+            action.note(
+                f"   git show {args.base_tag}:{file_path} > original_{file_path.replace('/','_')}"
+            )
+            action.note(
+                f"   git show {args.new_tag}:{file_path} > new_{file_path.replace('/','_')}"
+            )
+            action.note(
+                f"   meld original_{file_path.replace('/','_')} {file_path} new_{file_path.replace('/','_')}"
+            )
+
+            action.note("3. After resolving all conflicts, commit your changes:")
+            action.note(f"   git add .")
+            action.note(f"   git commit -m 'Resolve conflicts with {args.new_tag}'")
             action.note(f"Current branch: {new_branch}")
         else:
             action.note("All changes applied successfully!")
