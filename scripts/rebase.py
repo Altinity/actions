@@ -131,9 +131,9 @@ class PatchApplier(GitCommandExecutor):
     def __init__(self, work_dir: Path, diff_dir: Path) -> None:
         super().__init__(work_dir)
         self.diff_dir = diff_dir
-        self.failing_patches: List[Path] = (
+        self.failing_patches: List[Tuple[Path, str]] = (
             []
-        )  # List of patch files that failed to apply
+        )  # List of (patch_file, error_message) tuples
 
     def apply_patch(self, patch_file: Path) -> None:
         """Apply a patch file and handle conflicts."""
@@ -143,8 +143,9 @@ class PatchApplier(GitCommandExecutor):
                 action.note("Patch can be applied cleanly")
                 self.execute_git_command(["apply", str(patch_file)])
             else:
-                action.note("Conflict detected, marking for manual resolution")
-                self.failing_patches.append(patch_file)
+                error_message = result[2].strip() if result[2] else "Unknown error"
+                action.note(f"Conflict detected: {error_message}")
+                self.failing_patches.append((patch_file, error_message))
 
     def apply_changes(
         self, new_branch: str, upstream_base_tag: str, upstream_new_tag: str
@@ -412,13 +413,30 @@ def main() -> None:
         new_branch = rebase_manager.create_new_branch()
         rebase_manager.apply_changes(new_branch)
 
+        error_codes = {
+            "already exists in working directory": "E",
+            "patch does not apply": "C",
+            "No such file or directory": "N",
+        }
+
         if rebase_manager.patch_applier.failing_patches:
             action.note("The following files need manual conflict resolution:")
-            for patch_file in rebase_manager.patch_applier.failing_patches:
+
+            for (
+                patch_file,
+                error_message,
+            ) in rebase_manager.patch_applier.failing_patches:
                 file_path = rebase_manager.diff_generator.patch_to_file.get(
-                    patch_file, patch_file
+                    patch_file, str(patch_file)
                 )
-                action.note(f"  - {file_path}")
+                error_message = error_message.split(":")[-1].strip()
+                error_code = error_codes.get(error_message, error_message)
+                action.note(f"  - {error_code}: {file_path} ")
+
+            action.note("")
+            action.note("Conflict types:")
+            for error_message, error_code in error_codes.items():
+                action.note(f"{error_code}: {error_message}")
 
             action.note("")
             action.note("To resolve conflicts:")
