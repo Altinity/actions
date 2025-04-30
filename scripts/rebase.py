@@ -48,6 +48,12 @@ class DiffGenerator(GitCommandExecutor):
         super().__init__(work_dir)
         self.diff_dir = diff_dir
         self.patch_to_file: Dict[str, str] = {}  # Maps patch filenames to source files
+        self.ci_directories = {".github", "docker", "tests"}
+
+    def _is_ci_file(self, file_path: str) -> bool:
+        """Check if the file is in one of the CI directories."""
+        parts = file_path.split("/")
+        return any(part in self.ci_directories for part in parts)
 
     def generate_diff(self, base_ref: str, target_ref: str, output_file: str) -> None:
         """Generate a diff between two git references."""
@@ -67,9 +73,9 @@ class DiffGenerator(GitCommandExecutor):
     def generate_per_file_diffs(
         self, base_ref: str, target_ref: str, prefix: str = "custom_"
     ) -> None:
-        """Generate per-file diffs between two git references."""
+        """Generate per-file diffs between two git references, only for CI directories."""
         with Action(
-            f"Generating per-file diffs between {base_ref} and {target_ref}"
+            f"Generating per-file diffs between {base_ref} and {target_ref} for CI directories"
         ) as action:
             self.ensure_diff_dir()
             # Get list of changed files
@@ -82,7 +88,14 @@ class DiffGenerator(GitCommandExecutor):
             if not changed_files:
                 action.note("No changes detected between references.")
                 return
-            for file in changed_files:
+
+            # Filter for CI directory files only
+            ci_files = [f for f in changed_files if self._is_ci_file(f)]
+            if not ci_files:
+                action.note("No changes detected in CI directories.")
+                return
+
+            for file in ci_files:
                 patch_file = self.diff_dir / f"{prefix}{file.replace('/', '_')}.patch"
                 diff_result = self.execute_git_command(
                     ["diff", base_ref, target_ref, "--", file]
@@ -142,7 +155,7 @@ class PatchApplier(GitCommandExecutor):
                 self.apply_patch(diff_file)
 
             if self.failing_patches:
-                action.note("Conflicts detected.")
+                action.note("Conflicts detected in CI directories.")
             else:
                 action.note(f"Changes applied to branch: {new_branch}")
 
@@ -414,13 +427,13 @@ def main() -> None:
             )
             action.note("2. Compare the original file with the patch:")
             action.note(
-                f"   git show {args.base_tag}:{file_path} > original_{file_path.replace('/','_')}"
+                f"   git show {args.base_tag}:{file_path} > base_tag_{file_path.replace('/','_')}"
             )
             action.note(
-                f"   git show {args.new_tag}:{file_path} > new_{file_path.replace('/','_')}"
+                f"   git show {args.new_tag}:{file_path} > new_tag_{file_path.replace('/','_')}"
             )
             action.note(
-                f"   meld original_{file_path.replace('/','_')} {file_path} new_{file_path.replace('/','_')}"
+                f"   meld base_tag_{file_path.replace('/','_')} {file_path} new_tag_{file_path.replace('/','_')}"
             )
 
             action.note("3. After resolving all conflicts, commit your changes:")
