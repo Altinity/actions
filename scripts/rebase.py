@@ -135,7 +135,14 @@ class PatchApplier(GitCommandExecutor):
             []
         )  # List of (patch_file, error_message) tuples
 
-    def apply_patch(self, patch_file: Path) -> None:
+    def _get_file_hash(self, ref: str, file_path: str) -> Optional[str]:
+        """Get the git hash of a file in a given reference."""
+        result = self.execute_git_command(["ls-tree", ref, file_path])
+        if result[0] == 0 and result[1]:
+            return result[1].split()[2]  # The hash is the third field
+        return None
+
+    def apply_patch(self, patch_file: Path, new_base_ref: str) -> None:
         """Apply a patch file and handle conflicts."""
         with Action(f"Applying patch {patch_file.name}") as action:
             result = self.execute_git_command(["apply", "--check", str(patch_file)])
@@ -144,16 +151,30 @@ class PatchApplier(GitCommandExecutor):
                 self.execute_git_command(["apply", str(patch_file)])
             else:
                 error_message = result[2].strip() if result[2] else "Unknown error"
+
+                if "already exists in working directory" in error_message:
+                    # Extract the file path from the error message
+                    file_path = error_message.split(":")[-2].strip()
+
+                    # Get the hash of the file in the new base ref
+                    new_hash = self._get_file_hash(new_base_ref, file_path)
+                    if new_hash:
+                        # Get the hash of the file in the patch
+                        patch_hash = self._get_file_hash("HEAD", file_path)
+                        if patch_hash == new_hash:
+                            action.note(
+                                f"File {file_path} already exists with matching content, skipping"
+                            )
+                            return
+
                 action.note(f"Conflict detected: {error_message}")
                 self.failing_patches.append((patch_file, error_message))
 
-    def apply_changes(
-        self, new_branch: str, upstream_base_tag: str, upstream_new_tag: str
-    ) -> None:
+    def apply_changes(self, new_branch: str, new_base_ref: str) -> None:
         """Apply all custom patches to the new branch."""
         with Action("Applying changes to new branch") as action:
             for diff_file in self.diff_dir.glob("custom_*.patch"):
-                self.apply_patch(diff_file)
+                self.apply_patch(diff_file, new_base_ref)
 
             if self.failing_patches:
                 action.note("Conflicts detected in CI directories.")
@@ -346,7 +367,7 @@ class RebaseManager(GitCommandExecutor):
     def apply_changes(self, new_branch: str) -> None:
         """Apply changes to the new branch."""
         self.patch_applier.apply_changes(
-            new_branch, self.upstream_base_tag, self.upstream_new_tag
+            new_branch, f"refs/tags/{self.upstream_new_tag}"
         )
 
 
@@ -408,7 +429,7 @@ def main() -> None:
         action.note("Starting rebase process")
         rebase_manager.setup_workspace()
         rebase_manager.generate_custom_base_diff()
-        rebase_manager.generate_upstream_base_diff()
+        # rebase_manager.generate_upstream_base_diff()
 
         new_branch = rebase_manager.create_new_branch()
         rebase_manager.apply_changes(new_branch)
