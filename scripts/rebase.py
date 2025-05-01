@@ -460,8 +460,32 @@ class RebaseManager(GitCommandExecutor):
     def create_new_branch(self) -> str:
         """Create a new branch based on the upstream tag."""
         with Action("Creating new branch based on upstream tag") as action:
-            self.execute_git_command(["checkout", f"refs/tags/{self.upstream_new_tag}"])
-            self.execute_git_command(["checkout", "-b", self.output_branch])
+            # Check if branch already exists
+            result = self.execute_git_command(
+                ["show-ref", "--verify", f"refs/heads/{self.output_branch}"]
+            )
+            if result[0] == 0:
+                action.note(f"Branch {self.output_branch} already exists")
+                if (
+                    input(
+                        f"Delete and recreate branch {self.output_branch}? [y/N]: "
+                    ).lower()
+                    != "y"
+                ):
+                    raise ValueError(f"Branch {self.output_branch} already exists")
+                result = self.execute_git_command(["branch", "-D", self.output_branch])
+                if result[0] != 0:
+                    raise ValueError(f"Failed to delete existing branch: {result[2]}")
+
+            # Create branch directly from the tag
+            result = self.execute_git_command(
+                ["branch", self.output_branch, f"refs/tags/{self.upstream_new_tag}"]
+            )
+            if result[0] != 0:
+                raise ValueError(f"Failed to create branch: {result[2]}")
+            result = self.execute_git_command(["checkout", self.output_branch])
+            if result[0] != 0:
+                raise ValueError(f"Failed to checkout new branch: {result[2]}")
             action.note(f"Created new branch: {self.output_branch}")
             return self.output_branch
 
