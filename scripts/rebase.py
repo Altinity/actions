@@ -48,12 +48,11 @@ class DiffGenerator(GitCommandExecutor):
         super().__init__(work_dir)
         self.diff_dir = diff_dir
         self.patch_to_file: Dict[str, str] = {}  # Maps patch filenames to source files
-        self.ci_directories = {".github", "docker", "tests"}
+        self.ci_directories = {".github", "docker", "tests/ci"}
 
     def _is_ci_file(self, file_path: str) -> bool:
         """Check if the file is in one of the CI directories."""
-        parts = file_path.split("/")
-        return any(part in self.ci_directories for part in parts)
+        return any(file_path.startswith(directory) for directory in self.ci_directories)
 
     def generate_diff(self, base_ref: str, target_ref: str, output_file: str) -> None:
         """Generate a diff between two git references."""
@@ -142,7 +141,51 @@ class PatchApplier(GitCommandExecutor):
             return result[1].split()[2]  # The hash is the third field
         return None
 
-    def apply_patch(self, patch_file: Path, new_branch: str) -> None:
+    def _resolve_conflict_heuristics(
+        self, file_path: str, upstream_base_tag: str, upstream_new_tag: str
+    ) -> Optional[str]:
+        """Try to resolve conflicts using heuristics."""
+        # Get the content of the file in all three states
+        base_content = self.execute_git_command(
+            ["show", f"refs/tags/{upstream_base_tag}:{file_path}"]
+        )[1]
+        new_content = self.execute_git_command(
+            ["show", f"refs/tags/{upstream_new_tag}:{file_path}"]
+        )[1]
+        # Read custom content directly from disk
+        with open(self.work_dir / file_path, "r") as f:
+            custom_content = f.read()
+
+        # Check if there is no difference between base and new
+        # Our changes should already be in sync with base, so if new is the same, just return
+        if base_content == new_content:
+            return custom_content
+
+        # Check if there is no difference between new and custom
+        # This could appear as a conflict if the changes in this file were already pulled from upstream
+        if custom_content == new_content:
+            return custom_content
+
+        # Check if the only difference is altinityinfra vs clickhouse
+        # if custom_content.replace("altinityinfra/", "clickhouse/") == new_content:
+        #     return custom_content
+
+        # Check if the only difference is version numbers
+        # base_version = re.sub(r'v\d+\.\d+\.\d+\.\d+', 'VERSION', base_content)
+        # new_version = re.sub(r'v\d+\.\d+\.\d+\.\d+', 'VERSION', new_content)
+        # custom_version = re.sub(r'v\d+\.\d+\.\d+\.\d+', 'VERSION', custom_content)
+        # if base_version == new_version and base_version == custom_version:
+        #     return custom_content
+
+        return None
+
+    def apply_patch(
+        self,
+        patch_file: Path,
+        new_branch: str,
+        upstream_base_tag: str,
+        upstream_new_tag: str,
+    ) -> None:
         """Apply a patch file and handle conflicts."""
         with Action(f"Applying patch {patch_file.name}") as action:
             result = self.execute_git_command(["apply", "--check", str(patch_file)])
@@ -177,16 +220,62 @@ class PatchApplier(GitCommandExecutor):
                         action.note(f"File {file_path} was deleted in the new base ref")
                         return
 
+                elif "patch does not apply" in error_message:
+                    # Extract the file path from the error message
+                    file_path = error_message.split(":")[-2].strip()
+
+                    # Check if the file was deleted in upstream
+                    result = self.execute_git_command(
+                        ["ls-tree", f"refs/tags/{upstream_new_tag}", file_path]
+                    )
+                    if result[1] == "":
+
+                        # Get the commit where the file was deleted
+                        result = self.execute_git_command(
+                            [
+                                "log",
+                                "--diff-filter=D",
+                                "--format=%h %s",
+                                f"refs/tags/{upstream_base_tag}..refs/tags/{upstream_new_tag}",
+                                "--",
+                                file_path,
+                            ]
+                        )
+                        action.note(f"File {file_path} was deleted in upstream")
+                        action.note("- " + result[1].strip())
+                        action.note(f"Would you like to delete it now? [y/N]: ")
+                        if input().lower() == "y":
+                            os.remove(self.work_dir / file_path)
+                            return
+
+                    else:
+                        # Try to resolve conflicts using heuristics
+                        resolved_content = self._resolve_conflict_heuristics(
+                            file_path, upstream_base_tag, upstream_new_tag
+                        )
+                        if resolved_content:
+                            # Write the resolved content to the file
+                            with open(self.work_dir / file_path, "w") as f:
+                                f.write(resolved_content)
+                            action.note(
+                                f"Automatically resolved conflicts in {file_path}"
+                            )
+                            return
+
                 action.note(f"Conflict detected: {error_message}")
                 self.failing_patches.append((patch_file, error_message))
 
-    def apply_changes(self, new_branch: str) -> None:
+    def apply_changes(
+        self, new_branch: str, upstream_base_tag: str, upstream_new_tag: str
+    ) -> None:
         """Apply all custom patches to the new branch."""
         with Action("Applying changes to new branch") as action:
             self.execute_git_command(["checkout", new_branch])
 
             for diff_file in self.diff_dir.glob("custom_*.patch"):
-                self.apply_patch(diff_file, new_branch)
+                self.apply_patch(
+                    diff_file, new_branch, upstream_base_tag, upstream_new_tag
+                )
 
             if self.failing_patches:
                 action.note("Conflicts detected in CI directories.")
@@ -378,7 +467,9 @@ class RebaseManager(GitCommandExecutor):
 
     def apply_changes(self, new_branch: str) -> None:
         """Apply changes to the new branch."""
-        self.patch_applier.apply_changes(new_branch)
+        self.patch_applier.apply_changes(
+            new_branch, self.upstream_base_tag, self.upstream_new_tag
+        )
 
     def resolve_conflicts_interactively(
         self, new_branch: str, base_tag: str, new_tag: str
@@ -498,7 +589,9 @@ def main() -> None:
         }
 
         if rebase_manager.patch_applier.failing_patches:
-            action.note("The following files need manual conflict resolution:")
+            action.note(
+                f"The following {len(rebase_manager.patch_applier.failing_patches)} files need manual conflict resolution:"
+            )
             for (
                 patch_file,
                 error_message,
