@@ -380,6 +380,46 @@ class RebaseManager(GitCommandExecutor):
             new_branch, f"refs/tags/{self.upstream_new_tag}"
         )
 
+    def resolve_conflicts_interactively(
+        self, new_branch: str, base_tag: str, new_tag: str
+    ) -> None:
+        """Interactively resolve conflicts using meld."""
+        with Action("Resolving conflicts interactively") as action:
+            for patch_file, _ in self.patch_applier.failing_patches:
+                # Get the first conflicting file
+                file_path = self.diff_generator.patch_to_file[patch_file]
+
+                # Create temporary files
+                base_file = f"base_tag_{file_path.replace('/','_')}"
+                new_file = f"new_tag_{file_path.replace('/','_')}"
+
+                with open(base_file, "w") as f:
+                    f.write(
+                        self.execute_git_command(
+                            ["show", f"{base_tag}:{file_path}", "--"]
+                        )[1]
+                    )
+                with open(new_file, "w") as f:
+                    f.write(
+                        self.execute_git_command(
+                            ["show", f"{new_tag}:{file_path}", "--"]
+                        )[1]
+                    )
+
+                action.note(f"\nOpening meld for {file_path}")
+                action.note("Please resolve conflicts and save the file")
+                action.note("Press Enter when done...")
+
+                # Open meld
+                subprocess.run(["meld", base_file, file_path, new_file])
+                input()
+
+                # Clean up temporary files
+                os.remove(base_file)
+                os.remove(new_file)
+
+            action.note("All conflicts resolved!")
+
 
 def parse_args() -> argparse.Namespace:
     """Parse command line arguments."""
@@ -452,7 +492,6 @@ def main() -> None:
 
         if rebase_manager.patch_applier.failing_patches:
             action.note("The following files need manual conflict resolution:")
-
             for (
                 patch_file,
                 error_message,
@@ -462,33 +501,41 @@ def main() -> None:
                 )
                 error_message = error_message.split(":")[-1].strip()
                 error_code = error_codes.get(error_message, error_message)
-                action.note(f"  - {error_code}: {file_path} ")
+                action.note(f"  - {error_code}: {file_path}")
 
             action.note("")
             action.note("Conflict types:")
             for error_message, error_code in error_codes.items():
                 action.note(f"{error_code}: {error_message}")
 
-            action.note("")
-            action.note("To resolve conflicts:")
-            action.note(
-                "1. For each conflicting file, you need to manually edit the file"
+            response = input(
+                "\nWould you like to resolve conflicts interactively now? (y/n): "
             )
-            action.note("2. Compare the original file with the patch:")
-            action.note(
-                f"   git show {args.base_tag}:{file_path} > base_tag_{file_path.replace('/','_')}"
-            )
-            action.note(
-                f"   git show {args.new_tag}:{file_path} > new_tag_{file_path.replace('/','_')}"
-            )
-            action.note(
-                f"   meld base_tag_{file_path.replace('/','_')} {file_path} new_tag_{file_path.replace('/','_')}"
-            )
+            if response.lower() == "y":
+                rebase_manager.resolve_conflicts_interactively(
+                    new_branch, args.base_tag, args.new_tag
+                )
+            else:
+                action.note("")
+                action.note("To resolve conflicts manually:")
+                action.note(
+                    "1. For each conflicting file, you need to manually edit the file"
+                )
+                action.note("2. Compare the original file with the patch:")
+                action.note(
+                    f"   git show {args.base_tag}:{file_path} > base_tag_{file_path.replace('/','_')}"
+                )
+                action.note(
+                    f"   git show {args.new_tag}:{file_path} > new_tag_{file_path.replace('/','_')}"
+                )
+                action.note(
+                    f"   meld base_tag_{file_path.replace('/','_')} {file_path} new_tag_{file_path.replace('/','_')}"
+                )
 
-            action.note("3. After resolving all conflicts, commit your changes:")
-            action.note(f"   git add .")
-            action.note(f"   git commit -m 'Resolve conflicts with {args.new_tag}'")
-            action.note(f"Current branch: {new_branch}")
+                action.note("3. After resolving all conflicts, commit your changes:")
+                action.note(f"   git add .")
+                action.note(f"   git commit -m 'Resolve conflicts with {args.new_tag}'")
+                action.note(f"Current branch: {new_branch}")
         else:
             action.note("All changes applied successfully!")
             action.note(f"New branch created: {new_branch}")
