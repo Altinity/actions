@@ -142,7 +142,7 @@ class PatchApplier(GitCommandExecutor):
             return result[1].split()[2]  # The hash is the third field
         return None
 
-    def apply_patch(self, patch_file: Path, new_base_ref: str) -> None:
+    def apply_patch(self, patch_file: Path, new_branch: str) -> None:
         """Apply a patch file and handle conflicts."""
         with Action(f"Applying patch {patch_file.name}") as action:
             result = self.execute_git_command(["apply", "--check", str(patch_file)])
@@ -156,7 +156,7 @@ class PatchApplier(GitCommandExecutor):
                     # Extract the file path from the error message
                     file_path = error_message.split(":")[-2].strip()
                     # Get the hash of the file in the new base ref
-                    new_hash = self._get_file_hash(new_base_ref, file_path)
+                    new_hash = self._get_file_hash(new_branch, file_path)
                     if new_hash:
                         # Get the hash of the file in the patch
                         patch_hash = self._get_file_hash("HEAD", file_path)
@@ -171,7 +171,7 @@ class PatchApplier(GitCommandExecutor):
                     file_path = error_message.split(":")[-2].strip()
                     # Check if the file was deleted in the new base ref
                     result = self.execute_git_command(
-                        ["ls-tree", new_base_ref, file_path]
+                        ["ls-tree", new_branch, file_path]
                     )
                     if result[1] == "":
                         action.note(f"File {file_path} was deleted in the new base ref")
@@ -180,11 +180,13 @@ class PatchApplier(GitCommandExecutor):
                 action.note(f"Conflict detected: {error_message}")
                 self.failing_patches.append((patch_file, error_message))
 
-    def apply_changes(self, new_branch: str, new_base_ref: str) -> None:
+    def apply_changes(self, new_branch: str) -> None:
         """Apply all custom patches to the new branch."""
         with Action("Applying changes to new branch") as action:
+            self.execute_git_command(["checkout", new_branch])
+
             for diff_file in self.diff_dir.glob("custom_*.patch"):
-                self.apply_patch(diff_file, new_base_ref)
+                self.apply_patch(diff_file, new_branch)
 
             if self.failing_patches:
                 action.note("Conflicts detected in CI directories.")
@@ -376,22 +378,25 @@ class RebaseManager(GitCommandExecutor):
 
     def apply_changes(self, new_branch: str) -> None:
         """Apply changes to the new branch."""
-        self.patch_applier.apply_changes(
-            new_branch, f"refs/tags/{self.upstream_new_tag}"
-        )
+        self.patch_applier.apply_changes(new_branch)
 
     def resolve_conflicts_interactively(
         self, new_branch: str, base_tag: str, new_tag: str
     ) -> None:
         """Interactively resolve conflicts using meld."""
         with Action("Resolving conflicts interactively") as action:
-            for patch_file, _ in self.patch_applier.failing_patches:
+            num_patches = len(self.patch_applier.failing_patches)
+            for i, (patch_file, _) in enumerate(self.patch_applier.failing_patches):
                 # Get the first conflicting file
                 file_path = self.diff_generator.patch_to_file[patch_file]
 
                 # Create temporary files
-                base_file = f"base_tag_{file_path.replace('/','_')}"
-                new_file = f"new_tag_{file_path.replace('/','_')}"
+                base_file = os.path.join(
+                    self.work_dir, f"base_tag_{file_path.replace('/','_')}"
+                )
+                new_file = os.path.join(
+                    self.work_dir, f"new_tag_{file_path.replace('/','_')}"
+                )
 
                 with open(base_file, "w") as f:
                     f.write(
@@ -406,12 +411,14 @@ class RebaseManager(GitCommandExecutor):
                         )[1]
                     )
 
-                action.note(f"\nOpening meld for {file_path}")
+                action.note(f"({i+1}/{num_patches}) Opening meld for {file_path}")
                 action.note("Please resolve conflicts and save the file")
                 action.note("Press Enter when done...")
 
                 # Open meld
-                subprocess.run(["meld", base_file, file_path, new_file])
+                subprocess.run(
+                    ["meld", base_file, new_file, file_path], cwd=self.work_dir
+                )
                 input()
 
                 # Clean up temporary files
@@ -529,7 +536,7 @@ def main() -> None:
                     f"   git show {args.new_tag}:{file_path} > new_tag_{file_path.replace('/','_')}"
                 )
                 action.note(
-                    f"   meld base_tag_{file_path.replace('/','_')} {file_path} new_tag_{file_path.replace('/','_')}"
+                    f"   meld base_tag_{file_path.replace('/','_')} new_tag_{file_path.replace('/','_')} {file_path}"
                 )
 
                 action.note("3. After resolving all conflicts, commit your changes:")
