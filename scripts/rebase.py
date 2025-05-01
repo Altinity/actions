@@ -155,7 +155,6 @@ class PatchApplier(GitCommandExecutor):
                 if "already exists in working directory" in error_message:
                     # Extract the file path from the error message
                     file_path = error_message.split(":")[-2].strip()
-
                     # Get the hash of the file in the new base ref
                     new_hash = self._get_file_hash(new_base_ref, file_path)
                     if new_hash:
@@ -166,6 +165,17 @@ class PatchApplier(GitCommandExecutor):
                                 f"File {file_path} already exists with matching content, skipping"
                             )
                             return
+
+                elif "No such file or directory" in error_message:
+                    # Extract the file path from the error message
+                    file_path = error_message.split(":")[-2].strip()
+                    # Check if the file was deleted in the new base ref
+                    result = self.execute_git_command(
+                        ["ls-tree", new_base_ref, file_path]
+                    )
+                    if result[1] == "":
+                        action.note(f"File {file_path} was deleted in the new base ref")
+                        return
 
                 action.note(f"Conflict detected: {error_message}")
                 self.failing_patches.append((patch_file, error_message))
