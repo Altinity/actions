@@ -673,6 +673,7 @@ def main() -> None:
                 rebase_manager.resolve_conflicts_interactively(
                     new_branch, args.base_tag, args.new_tag
                 )
+                action.note("After resolving all conflicts, commit your changes:")
             else:
                 action.note("")
                 action.note("To resolve conflicts manually:")
@@ -693,9 +694,12 @@ def main() -> None:
                     f"   meld base_tag_{file_path.replace('/','_')} new_tag_{file_path.replace('/','_')} {file_path}"
                 )
                 action.note("3. After resolving all conflicts, commit your changes:")
-                action.note(f"   git add .")
-                action.note(f"   git commit -m 'Resolve conflicts with {args.new_tag}'")
-                action.note(f"Current branch: {new_branch}")
+
+            action.note(
+                f"   git add {' '.join(rebase_manager.diff_generator.ci_directories)}"
+            )
+            action.note(f"   git commit -m 'Resolve conflicts with {args.new_tag}'")
+            action.note(f"Current branch: {new_branch}")
         else:
             action.note("All changes applied successfully!")
             action.note(f"New branch created: {new_branch}")
