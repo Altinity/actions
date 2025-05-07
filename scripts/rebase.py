@@ -245,6 +245,17 @@ class PatchApplier(GitCommandExecutor):
                     # Extract the file path from the error message
                     file_path = error_message.split(":")[-2].strip()
 
+                    # Check if the file was deleted locally
+                    result = self.execute_git_command(
+                        ["ls-tree", f"refs/heads/{custom_branch}", file_path]
+                    )
+                    if result[1] == "":
+                        action.note(f"File {file_path} does not exist in custom")
+                        action.note(f"Would you like to delete it now? [y/N]: ")
+                        if input().lower() == "y":
+                            os.remove(self.work_dir / file_path)
+                            return
+
                     # Check if the file was deleted in upstream
                     result = self.execute_git_command(
                         ["ls-tree", f"refs/tags/{upstream_new_tag}", file_path]
@@ -262,11 +273,17 @@ class PatchApplier(GitCommandExecutor):
                                 file_path,
                             ]
                         )
-                        action.note(f"File {file_path} was deleted in upstream")
-                        action.note("- " + result[1].strip())
-                        action.note(f"Would you like to delete it now? [y/N]: ")
-                        if input().lower() == "y":
-                            os.remove(self.work_dir / file_path)
+                        if result[1]:
+                            action.note(f"File {file_path} was deleted in upstream")
+                            action.note("- " + result[1].strip())
+                            action.note(f"Would you like to delete it now? [y/N]: ")
+                            if input().lower() == "y":
+                                os.remove(self.work_dir / file_path)
+                                return
+                        else:
+                            action.note(
+                                f"File {file_path} is not known to upstream, will keep"
+                            )
                             return
 
                     else:
