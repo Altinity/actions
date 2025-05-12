@@ -245,21 +245,43 @@ class PatchApplier(GitCommandExecutor):
                     file_path = error_message.split(":")[-2].strip()
 
                     # Check if the file was deleted locally
-                    result = self.execute_git_command(
-                        ["ls-tree", f"refs/heads/{custom_branch}", file_path]
+                    exists_in_custom = (
+                        self.execute_git_command(
+                            ["ls-tree", f"refs/heads/{custom_branch}", file_path]
+                        )[1]
+                        != ""
                     )
-                    if result[1] == "":
+
+                    # Check if the file was deleted in upstream
+                    exists_in_upstream = (
+                        self.execute_git_command(
+                            ["ls-tree", f"refs/tags/{upstream_new_tag}", file_path]
+                        )[1]
+                        != ""
+                    )
+
+                    if not exists_in_custom:
+
+                        # Get the commit where the file was deleted
+                        result = self.execute_git_command(
+                            [
+                                "log",
+                                "--diff-filter=D",
+                                "--format=%h %s",
+                                f"refs/heads/{custom_branch}",
+                                "--",
+                                file_path,
+                            ]
+                        )
+
                         action.note(f"File {file_path} does not exist in custom")
+                        action.note("- " + result[1].strip())
                         action.note(f"Would you like to delete it now? [y/N]: ")
                         if input().lower() == "y":
                             os.remove(self.work_dir / file_path)
                             return
 
-                    # Check if the file was deleted in upstream
-                    result = self.execute_git_command(
-                        ["ls-tree", f"refs/tags/{upstream_new_tag}", file_path]
-                    )
-                    if result[1] == "":
+                    elif not exists_in_upstream:
 
                         # Get the commit where the file was deleted
                         result = self.execute_git_command(
