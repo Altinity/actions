@@ -101,13 +101,15 @@ def get_upstream_statuses(checks_fails, clickhouse_version):
     return upstream_statuses
 
 
-def compare_to_upstream(db_client, args):
+def compare_to_upstream(
+    db_client, actions_run_url, clickhouse_version, include_broken=False
+):
 
     checks_fails = get_checks_fails(
-        db_client, args.actions_run_url, include_broken=args.broken
+        db_client, actions_run_url, include_broken=include_broken
     )
 
-    upstream_statuses = get_upstream_statuses(checks_fails, args.clickhouse_version)
+    upstream_statuses = get_upstream_statuses(checks_fails, clickhouse_version)
 
     combined_df = checks_fails.merge(
         upstream_statuses,
@@ -123,38 +125,18 @@ def compare_to_upstream(db_client, args):
         }
     )
 
-    print(
-        combined_df.drop(columns=["link_upstream", "link_altinity"]).to_markdown(
-            index=False
-        )
-    )
-    filename = f"compared_fails_{args.clickhouse_version}_{args.actions_run_url.split('/')[-1]}"
-    combined_df.to_csv(
-        f"{filename}.csv",
-        index=False,
-    )
-    with open(f"{filename}.md", "w") as f:
-        f.write("# Comparison of test failures\n\n")
-        f.write(f"Upstream Version: <{args.clickhouse_version}>\n\n")
-        f.write(f"Altinity Run: <{args.actions_run_url}>\n\n")
-        # Convert bare URLs to markdown links in report columns
-        for col in ["link_upstream", "link_altinity"]:
-            mask = combined_df[col] != "N/A"
-            combined_df.loc[mask, col] = combined_df.loc[mask, col].apply(
-                lambda x: f"[Results]({x})"
-            )
-        f.write(combined_df.to_markdown(index=False))
+    return combined_df
 
 
-def compare_two_runs(db_client, args):
+def compare_two_runs(
+    db_client, actions_run_url_1, actions_run_url_2, include_broken=False
+):
 
     checks_fails_1 = get_checks_fails(
-        db_client, args.actions_run_url, include_broken=args.broken
+        db_client, actions_run_url_1, include_broken=include_broken
     )
 
-    checks_fails_2 = get_checks_statuses(
-        db_client, args.actions_run_url_2, checks_fails_1
-    )
+    checks_fails_2 = get_checks_statuses(db_client, actions_run_url_2, checks_fails_1)
     print(len(checks_fails_1), len(checks_fails_2))
 
     combined_df = (
@@ -168,23 +150,44 @@ def compare_two_runs(db_client, args):
         .replace("nan", "N/A")
     )
 
-    print(combined_df.drop(columns=["link_1", "link_2"]).to_markdown(index=False))
-    filename = f"compared_fails_{args.actions_run_url.split('/')[-1]}_{args.actions_run_url_2.split('/')[-1]}"
-    combined_df.to_csv(
+    return combined_df
+
+
+def print_results_md(results):
+    print(
+        results.drop(
+            columns=["link_1", "link_2", "link_upstream", "link_altinity"],
+            errors="ignore",
+        ).to_markdown(index=False)
+    )
+
+
+def export_results_csv(results, filename):
+    results.to_csv(
         f"{filename}.csv",
         index=False,
     )
+
+
+def export_results_md(results, args, filename):
+
     with open(f"{filename}.md", "w") as f:
         f.write("# Comparison of test failures\n\n")
-        f.write(f"Run 1: <{args.actions_run_url}>\n\n")
-        f.write(f"Run 2: <{args.actions_run_url_2}>\n\n")
+        if args.clickhouse_version:
+            f.write(f"Upstream Version: <{args.clickhouse_version}>\n\n")
+            f.write(f"Altinity Run: <{args.actions_run_url}>\n\n")
+            link_cols = ["link_upstream", "link_altinity"]
+        else:
+            f.write(f"Run 1: <{args.actions_run_url}>\n\n")
+            f.write(f"Run 2: <{args.actions_run_url_2}>\n\n")
+            link_cols = ["link_1", "link_2"]
         # Convert bare URLs to markdown links in report columns
-        for col in ["link_1", "link_2"]:
-            mask = combined_df[col] != "N/A"
-            combined_df.loc[mask, col] = combined_df.loc[mask, col].apply(
+        for col in link_cols:
+            mask = results[col] != "N/A"
+            results.loc[mask, col] = results.loc[mask, col].apply(
                 lambda x: f"[Results]({x})"
             )
-        f.write(combined_df.to_markdown(index=False))
+        f.write(results.to_markdown(index=False))
 
 
 def parse_args() -> argparse.Namespace:
@@ -226,14 +229,27 @@ def main():
         exit(1)
 
     if args.clickhouse_version:
-        compare_to_upstream(db_client, args)
+        results = compare_to_upstream(
+            db_client, args.actions_run_url, args.clickhouse_version, args.broken
+        )
+        filename = f"compared_fails_{args.clickhouse_version}_{args.actions_run_url.split('/')[-1]}"
 
     elif args.actions_run_url_2:
-        compare_two_runs(db_client, args)
+        results = compare_two_runs(
+            db_client,
+            args.actions_run_url,
+            args.actions_run_url_2,
+            args.broken,
+        )
+        filename = f"compared_fails_{args.actions_run_url.split('/')[-1]}_{args.actions_run_url_2.split('/')[-1]}"
 
     else:
         print("Error: --clickhouse-version or --actions-run-url-2 is required")
         exit(1)
+
+    print_results_md(results)
+    export_results_csv(results, filename)
+    export_results_md(results, args, filename)
 
 
 if __name__ == "__main__":
