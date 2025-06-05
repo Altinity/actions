@@ -16,7 +16,7 @@ def get_checks_fails(client: Client, job_url: str, include_broken=False):
     """
     # , check_start_time as start_time
     columns = "splitByString(' [', check_name)[1] as check_group, splitByString(' [', check_name)[2] as group_id, "
-    columns += "test_name, check_status, test_status"
+    columns += "test_name, check_status, test_status, report_url as link"
     statuses = "'FAIL', 'ERROR'"
     if include_broken:
         statuses += ", 'BROKEN'"
@@ -41,7 +41,7 @@ def get_checks_statuses(client: Client, job_url: str, checks_fails):
     )
 
     columns = "splitByString(' [', check_name)[1] as check_group, "
-    columns += "test_name, check_status, test_status"
+    columns += "test_name, check_status, test_status, report_url as link"
     query = f"""SELECT {columns} FROM `gh-data`.checks
                 WHERE task_url='{job_url}'
                 AND (check_group, test_name) IN {tests}
@@ -61,6 +61,7 @@ def get_upstream_statuses(checks_fails, clickhouse_version):
         )
     )
     print("Will check status of", len(tests), "upstream tests")
+    assert len(tests) > 0
     # print('Tests:', tests)
     # return
     # --max(check_start_time) as start_time
@@ -69,6 +70,7 @@ def get_upstream_statuses(checks_fails, clickhouse_version):
                   test_name,
                   argMax(check_status, check_start_time) as check_status,
                   argMax(test_status, check_start_time) as test_status,
+                  argMax(report_url, check_start_time) as link,
                   max(check_start_time) as start_time
                 FROM default.checks
                 WHERE head_ref='{clickhouse_version}'
@@ -121,11 +123,27 @@ def compare_to_upstream(db_client, args):
         }
     )
 
-    print(combined_df.to_markdown(index=False))
+    print(
+        combined_df.drop(columns=["link_upstream", "link_altinity"]).to_markdown(
+            index=False
+        )
+    )
+    filename = f"compared_fails_{args.clickhouse_version}_{args.actions_run_url.split('/')[-1]}"
     combined_df.to_csv(
-        f"compared_fails_{args.clickhouse_version}_{args.actions_run_url.split('/')[-1]}.csv",
+        f"{filename}.csv",
         index=False,
     )
+    with open(f"{filename}.md", "w") as f:
+        f.write("# Comparison of test failures\n\n")
+        f.write(f"Upstream Version: <{args.clickhouse_version}>\n\n")
+        f.write(f"Altinity Run: <{args.actions_run_url}>\n\n")
+        # Convert bare URLs to markdown links in report columns
+        for col in ["link_upstream", "link_altinity"]:
+            mask = combined_df[col] != "N/A"
+            combined_df.loc[mask, col] = combined_df.loc[mask, col].apply(
+                lambda x: f"[Results]({x})"
+            )
+        f.write(combined_df.to_markdown(index=False))
 
 
 def compare_two_runs(db_client, args):
@@ -150,11 +168,23 @@ def compare_two_runs(db_client, args):
         .replace("nan", "N/A")
     )
 
-    print(combined_df.to_markdown(index=False))
+    print(combined_df.drop(columns=["link_1", "link_2"]).to_markdown(index=False))
+    filename = f"compared_fails_{args.actions_run_url.split('/')[-1]}_{args.actions_run_url_2.split('/')[-1]}"
     combined_df.to_csv(
-        f"compared_fails_{args.actions_run_url.split('/')[-1]}_{args.actions_run_url_2.split('/')[-1]}.csv",
+        f"{filename}.csv",
         index=False,
     )
+    with open(f"{filename}.md", "w") as f:
+        f.write("# Comparison of test failures\n\n")
+        f.write(f"Run 1: <{args.actions_run_url}>\n\n")
+        f.write(f"Run 2: <{args.actions_run_url_2}>\n\n")
+        # Convert bare URLs to markdown links in report columns
+        for col in ["link_1", "link_2"]:
+            mask = combined_df[col] != "N/A"
+            combined_df.loc[mask, col] = combined_df.loc[mask, col].apply(
+                lambda x: f"[Results]({x})"
+            )
+        f.write(combined_df.to_markdown(index=False))
 
 
 def parse_args() -> argparse.Namespace:
