@@ -257,25 +257,51 @@ def export_results_csv(results, filename):
     )
 
 
-def export_results_md(results, args, filename):
+def format_ref_md(ref):
+    if ref.startswith("v"):
+        return f"[{ref}](https://github.com/Altinity/ClickHouse/releases/tag/{ref})"
+    elif ref.startswith("https://github.com/") and "/actions/runs/" in ref:
+        return f"[Workflow Run ({ref.split('/')[-1]})]({ref})"
+    elif len(ref) == 40:
+        return (
+            f"[Commit ({ref[:7]})](https://github.com/Altinity/ClickHouse/commit/{ref})"
+        )
+    else:
+        return ref
 
-    with open(f"{filename}.md", "w") as f:
+
+def export_results_md(
+    previous_results,
+    upstream_results,
+    current_ref,
+    previous_ref,
+    upstream_ref,
+):
+    # Convert bare URLs to markdown links
+    for results in [previous_results, upstream_results]:
+        if results is not None:
+            for column in results.columns:
+                if results[column].dtype != "object":
+                    continue
+                mask = results[column].astype(str).str.startswith("https://", na=False)
+                results.loc[mask, column] = results.loc[mask, column].apply(
+                    lambda x: f"[Results]({x})"
+                )
+
+    with open(f"comparison_results.md", "w") as f:
         f.write("# Comparison of test failures\n\n")
-        if args.clickhouse_version:
-            f.write(f"Upstream Version: <{args.clickhouse_version}>\n\n")
-            f.write(f"Altinity Run: <{args.actions_run_url}>\n\n")
-            link_cols = ["link_upstream", "link_altinity"]
-        else:
-            f.write(f"Run 1: <{args.actions_run_url}>\n\n")
-            f.write(f"Run 2: <{args.actions_run_url_2}>\n\n")
-            link_cols = ["link_1", "link_2"]
-        # Convert bare URLs to markdown links in report columns
-        for col in link_cols:
-            mask = results[col] != "N/A"
-            results.loc[mask, col] = results.loc[mask, col].apply(
-                lambda x: f"[Results]({x})"
-            )
-        f.write(results.to_markdown(index=False))
+        f.write(f"Altinity Ref: {format_ref_md(current_ref)}\n\n")
+        if previous_results is not None:
+            f.write("## Compare with Previous Version\n\n")
+            f.write(f"Previous Ref: {format_ref_md(previous_ref)}\n\n")
+            f.write(previous_results.to_markdown(index=False))
+            f.write("\n\n")
+        if upstream_results is not None:
+            f.write("## Compare with Upstream Version\n\n")
+            f.write(f"Upstream Ref: {format_ref_md(upstream_ref)}\n\n")
+            f.write(upstream_results.to_markdown(index=False))
+            f.write("\n\n")
+    print("Comparison results exported to comparison_results.md")
 
 
 def parse_args() -> argparse.Namespace:
@@ -384,22 +410,34 @@ def main():
             )
             exit(1)
 
+    previous_combined_results = None
     if args.previous_ref:
         print("\nComparing with previous version")
-        results = merge_statuses(
+        previous_combined_results = merge_statuses(
             current_failures, previous_failures, suffixes=("_current", "_previous")
         )
-        print_results_md(results, drop_columns=["link_current", "link_previous"])
+        print_results_md(
+            previous_combined_results, drop_columns=["link_current", "link_previous"]
+        )
 
+    upstream_combined_results = None
     if args.upstream_ref:
         print("\nComparing with upstream version")
-        results = merge_statuses(
+        upstream_combined_results = merge_statuses(
             current_failures, upstream_failures, suffixes=("_current", "_upstream")
         )
-        print_results_md(results, drop_columns=["link_current", "link_upstream"])
+        print_results_md(
+            upstream_combined_results, drop_columns=["link_current", "link_upstream"]
+        )
 
     # export_results_csv(results, filename)
-    # export_results_md(results, args, filename)
+    export_results_md(
+        previous_combined_results,
+        upstream_combined_results,
+        args.current_ref,
+        args.previous_ref,
+        args.upstream_ref,
+    )
 
 
 if __name__ == "__main__":
