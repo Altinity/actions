@@ -305,7 +305,9 @@ def export_results_md(
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Create a combined CI report.")
+    parser = argparse.ArgumentParser(
+        description="Compare CI failures with previous and upstream versions."
+    )
     parser.add_argument(
         "--current-ref",
         required=True,
