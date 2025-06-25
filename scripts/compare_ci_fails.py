@@ -6,6 +6,7 @@ import requests
 
 from clickhouse_driver import Client
 from datetime import timedelta
+import pandas as pd
 
 DATABASE_HOST_VAR = "CHECKS_DATABASE_HOST"
 DATABASE_USER_VAR = "CHECKS_DATABASE_USER"
@@ -160,7 +161,7 @@ def get_upstream_statuses(checks_fails, commit_sha=None, clickhouse_version=None
     # There are some "test results" that only get logged on failure,
     # Make sure that they are not accidentally included in the set of latest results,
     tolerance = timedelta(hours=3)
-    latest_start_time = upstream_statuses["start_time"].max()
+    latest_start_time = pd.to_datetime(upstream_statuses["start_time"].max())
     upstream_statuses = upstream_statuses[
         upstream_statuses["start_time"] >= latest_start_time - tolerance
     ].drop(columns=["start_time"])
