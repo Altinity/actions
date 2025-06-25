@@ -1,0 +1,27 @@
+repo: "owner/repo"
+vpc_id: "vpc-xxxxx"
+subnet_id: "subnet-xxxxx"
+#security_group_id: "sg-xxxxx" # Optional: will create one if not specified
+runners:
+  - instance_type: "t4g.xlarge" 
+    ami_id: "ami-07041441b708acbd6" # Ubuntu Server 24.04 LTS
+    count: 1
+    labels:
+      - self-hosted
+      - Linux
+      - ARM64
+      - type-t4g.xlarge
+      - label1
+      - label2
+      - label3
+  - instance_type: "m6g.4xlarge"
+    ami_id: "ami-07041441b708acbd6" # Ubuntu Server 24.04 LTS
+    count: 1
+    labels:
+      - self-hosted
+      - Linux
+      - ARM64
+      - type-m6g.4xlarge
+      - label1
+      - label2
+      - label3
