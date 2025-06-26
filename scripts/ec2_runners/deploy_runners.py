@@ -84,10 +84,62 @@ def main():
         region = config["region"]
         runner_configs = config["runners"]
 
+        # Get networking configuration from config file
+        vpc_id = config.get("vpc_id")
+        subnet_id = config.get("subnet_id")
+        security_group_id = config.get("security_group_id")
+
+        if not vpc_id:
+            raise ValueError("vpc_id not specified in config file")
+        if not subnet_id:
+            raise ValueError("subnet_id not specified in config file")
+
         with open(args.user_data, "r") as f:
             user_data_template = f.read()
 
         ec2 = boto3.client("ec2", region_name=region)
+
+        # Create security group if not specified
+        if not security_group_id:
+            # Create a basic security group for runners
+            sg_name = f"github-runner-sg-{repo.replace('/', '-')}"
+            try:
+                # Check if security group already exists
+                sgs = ec2.describe_security_groups(
+                    Filters=[
+                        {"Name": "group-name", "Values": [sg_name]},
+                        {"Name": "vpc-id", "Values": [vpc_id]},
+                    ]
+                )
+                if sgs["SecurityGroups"]:
+                    security_group_id = sgs["SecurityGroups"][0]["GroupId"]
+                    print(f"Using existing security group: {security_group_id}")
+                else:
+                    # Create new security group
+                    response = ec2.create_security_group(
+                        GroupName=sg_name,
+                        Description=f"Security group for GitHub runners in {repo}",
+                        VpcId=vpc_id,
+                    )
+                    security_group_id = response["GroupId"]
+
+                    # Add basic rules
+                    ec2.authorize_security_group_ingress(
+                        GroupId=security_group_id,
+                        IpPermissions=[
+                            {
+                                "IpProtocol": "tcp",
+                                "FromPort": 22,
+                                "ToPort": 22,
+                                "IpRanges": [{"CidrIp": "0.0.0.0/0"}],
+                            }
+                        ],
+                    )
+                    print(f"Created security group: {security_group_id}")
+            except Exception as e:
+                print(f"Warning: Could not create security group: {e}")
+                print("Continuing without security group...")
+                security_group_id = None
 
         for runner_config in runner_configs:
             instance_type = runner_config["instance_type"]
@@ -130,13 +182,15 @@ def main():
 
             instance_name = f"github-runner-{repo.replace('/', '-')}-{labels[0]}"
 
-            instances = ec2.run_instances(
-                ImageId=ami_id,
-                InstanceType=instance_type,
-                MinCount=instances_to_create,
-                MaxCount=instances_to_create,
-                UserData=user_data,
-                TagSpecifications=[
+            # Build run_instances parameters
+            run_params = {
+                "ImageId": ami_id,
+                "InstanceType": instance_type,
+                "MinCount": instances_to_create,
+                "MaxCount": instances_to_create,
+                "UserData": user_data,
+                "SubnetId": subnet_id,
+                "TagSpecifications": [
                     {
                         "ResourceType": "instance",
                         "Tags": [
@@ -146,7 +200,13 @@ def main():
                         ],
                     },
                 ],
-            )
+            }
+
+            # Add security group if available
+            if security_group_id:
+                run_params["SecurityGroupIds"] = [security_group_id]
+
+            instances = ec2.run_instances(**run_params)
 
             print(f"Successfully launched {len(instances['Instances'])} instance(s).")
             for i in instances["Instances"]:
