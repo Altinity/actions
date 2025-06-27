@@ -1,11 +1,13 @@
 repo: "Altinity/ClickHouse"
 region: "us-east-1"
+#vpc_id: "vpc-022419b07b58d216d"  # altinity-staging VPC
+#subnet_id: "subnet-00f5e4fb0e8ef4649"  # altinity-staging-public-us-east-1a
 vpc_id: "vpc-01c4c2f5a2656f34c"  # qa VPC
-subnet_id: "subnet-0d0ff128f7501473b"  # qa-public-us-east-1a
+subnet_id: "subnet-0a9c364f785958571" # github-runners-subnet
 # security_group_id: "sg-xxxxx"  # Optional: will create one if not specified
 runners:
-  - instance_type: "t4g.xlarge"
-    ami_id: "ami-06b7284d934945f9c"
+  - instance_type: "t4g.xlarge" 
+    ami_id: "ami-022bbd2ccaf21691f"  # ARM64 Amazon Linux 2023
     count: 1
     labels:
       - self-hosted
@@ -20,7 +22,7 @@ runners:
       - altinity-image-arm-app-docker-ce
       - altinity-setup-regression
   - instance_type: "m6g.4xlarge"
-    ami_id: "ami-06b7284d934945f9c"
+    ami_id: "ami-022bbd2ccaf21691f"  # ARM64 Amazon Linux 2023
     count: 1
     labels:
       - self-hosted

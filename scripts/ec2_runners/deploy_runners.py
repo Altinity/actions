@@ -4,6 +4,7 @@ import os
 import yaml
 import boto3
 import requests
+import time
 
 
 def get_github_token():
@@ -123,23 +124,70 @@ def main():
                     )
                     security_group_id = response["GroupId"]
 
-                    # Add basic rules
+                    # Add comprehensive rules for GitHub runners
+                    print(f"Creating security group: {security_group_id}")
+
+                    # Inbound rules
+                    inbound_rules = [
+                        # SSH access
+                        {
+                            "IpProtocol": "tcp",
+                            "FromPort": 22,
+                            "ToPort": 22,
+                            "IpRanges": [{"CidrIp": "0.0.0.0/0"}],
+                        },
+                        # ICMP (ping) for connectivity testing
+                        {
+                            "IpProtocol": "icmp",
+                            "FromPort": -1,
+                            "ToPort": -1,
+                            "IpRanges": [{"CidrIp": "0.0.0.0/0"}],
+                        },
+                        # HTTP for package downloads
+                        {
+                            "IpProtocol": "tcp",
+                            "FromPort": 80,
+                            "ToPort": 80,
+                            "IpRanges": [{"CidrIp": "0.0.0.0/0"}],
+                        },
+                        # HTTPS for GitHub API and secure downloads
+                        {
+                            "IpProtocol": "tcp",
+                            "FromPort": 443,
+                            "ToPort": 443,
+                            "IpRanges": [{"CidrIp": "0.0.0.0/0"}],
+                        },
+                    ]
+
                     ec2.authorize_security_group_ingress(
-                        GroupId=security_group_id,
-                        IpPermissions=[
+                        GroupId=security_group_id, IpPermissions=inbound_rules
+                    )
+
+                    # Try to add outbound rules, but don't fail if they already exist
+                    try:
+                        outbound_rules = [
                             {
-                                "IpProtocol": "tcp",
-                                "FromPort": 22,
-                                "ToPort": 22,
+                                "IpProtocol": "-1",
+                                "FromPort": -1,
+                                "ToPort": -1,
                                 "IpRanges": [{"CidrIp": "0.0.0.0/0"}],
                             }
-                        ],
-                    )
+                        ]
+
+                        ec2.authorize_security_group_egress(
+                            GroupId=security_group_id, IpPermissions=outbound_rules
+                        )
+                    except Exception as e:
+                        if "Duplicate" in str(e):
+                            print("Outbound rules already exist (this is fine)")
+                        else:
+                            print(f"Warning: Could not add outbound rules: {e}")
+
                     print(f"Created security group: {security_group_id}")
             except Exception as e:
-                print(f"Warning: Could not create security group: {e}")
-                print("Continuing without security group...")
-                security_group_id = None
+                print(f"Error creating security group: {e}")
+                print("Cannot continue without proper security group")
+                return
 
         for runner_config in runner_configs:
             instance_type = runner_config["instance_type"]
@@ -167,50 +215,58 @@ def main():
                 print(f"No new instances needed for labels: {','.join(labels)}")
                 continue
 
-            print(f"Requesting registration token for {repo}...")
-            reg_token = get_runner_registration_token(repo, github_token)
+            print(
+                f"Launching {instances_to_create} instance(s) of type {instance_type} with labels: {','.join(labels)}"
+            )
 
             user_data = user_data_template.replace(
                 "${github_repo_url}", f"https://github.com/{repo}"
             )
             user_data = user_data.replace("${runner_labels}", ",".join(labels))
-            user_data = user_data.replace("${runner_token}", reg_token)
 
-            print(
-                f"Launching {instances_to_create} instance(s) of type {instance_type} with labels: {','.join(labels)}"
-            )
+            # Create unique instance name with timestamp and index
+            timestamp = int(time.time())
+            for i in range(instances_to_create):
+                reg_token = get_runner_registration_token(repo, github_token)
 
-            instance_name = f"github-runner-{repo.replace('/', '-')}-{labels[0]}"
+                instance_name = f"github-ec2-runner-{repo.replace('/', '-')}-{instance_type}-{timestamp}-{i+1}"
 
-            # Build run_instances parameters
-            run_params = {
-                "ImageId": ami_id,
-                "InstanceType": instance_type,
-                "MinCount": instances_to_create,
-                "MaxCount": instances_to_create,
-                "UserData": user_data,
-                "SubnetId": subnet_id,
-                "TagSpecifications": [
-                    {
-                        "ResourceType": "instance",
-                        "Tags": [
-                            {"Key": "Name", "Value": instance_name},
-                            {"Key": "GitHubRepo", "Value": repo},
-                            {"Key": "GitHubLabels", "Value": ",".join(labels)},
-                        ],
-                    },
-                ],
-            }
+                user_data = user_data.replace("${runner_token}", reg_token)
+                user_data = user_data.replace("${runner_name}", instance_name)
 
-            # Add security group if available
-            if security_group_id:
-                run_params["SecurityGroupIds"] = [security_group_id]
+                print(
+                    f"Launching instance {i+1}/{instances_to_create} of type {instance_type} with labels: {','.join(labels)}"
+                )
 
-            instances = ec2.run_instances(**run_params)
+                # Build run_instances parameters
+                run_params = {
+                    "ImageId": ami_id,
+                    "InstanceType": instance_type,
+                    "MinCount": 1,
+                    "MaxCount": 1,
+                    "UserData": user_data,
+                    "SubnetId": subnet_id,
+                    "TagSpecifications": [
+                        {
+                            "ResourceType": "instance",
+                            "Tags": [
+                                {"Key": "Name", "Value": instance_name},
+                                {"Key": "GitHubRepo", "Value": repo},
+                                {"Key": "GitHubLabels", "Value": ",".join(labels)},
+                            ],
+                        },
+                    ],
+                }
 
-            print(f"Successfully launched {len(instances['Instances'])} instance(s).")
-            for i in instances["Instances"]:
-                print(f"  - Instance ID: {i['InstanceId']}")
+                # Add security group if available
+                if security_group_id:
+                    run_params["SecurityGroupIds"] = [security_group_id]
+
+                instances = ec2.run_instances(**run_params)
+
+                print(
+                    f"Successfully launched instance: {instances['Instances'][0]['InstanceId']} ({instance_name})"
+                )
 
     except (ValueError, FileNotFoundError, requests.exceptions.RequestException) as e:
         print(f"Error: {e}")
