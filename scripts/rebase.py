@@ -116,7 +116,7 @@ class DiffGenerator(GitCommandExecutor):
                     f.write(diff_result[1])
                 action.note(f"Generated patch for {file}: {patch_file}")
                 # Store the mapping between patch filename and source file
-                self.patch_to_file[patch_file] = file
+                self.patch_to_file[patch_file.name] = file
 
     def generate_temp_branch_diff(
         self, base_ref: str, source_branch: str, output_file: str
@@ -214,6 +214,7 @@ class PatchApplier(GitCommandExecutor):
     ) -> None:
         """Apply a patch file and handle conflicts."""
         with Action(f"Applying patch {patch_file.name}") as action:
+            patch_file = patch_file.resolve()
             result = self.execute_git_command(["apply", "--check", str(patch_file)])
             if result[0] == 0:
                 action.note("Patch can be applied cleanly")
@@ -221,7 +222,11 @@ class PatchApplier(GitCommandExecutor):
             else:
                 error_message = result[2].strip() if result[2] else "Unknown error"
 
-                if "already exists in working directory" in error_message:
+                if "can't open patch" in error_message:
+                    action.note(f"ERROR: Failed to open patch file: {result}")
+                    exit(1)
+
+                elif "already exists in working directory" in error_message:
                     # Extract the file path from the error message
                     file_path = error_message.split(":")[-2].strip()
                     # Get the hash of the file in the new base ref
@@ -375,7 +380,7 @@ class RebaseManager(GitCommandExecutor):
         self.upstream_new_tag = upstream_new_tag
         self.upstream_base_tag = upstream_base_tag
         self.custom_branch = custom_branch
-        self.work_dir = work_dir
+        self.work_dir = work_dir.resolve()
         self.fork_repo = fork_repo
         self.upstream_repo = "https://github.com/ClickHouse/ClickHouse.git"
         self.diff_dir = work_dir / "diffs"
@@ -576,7 +581,7 @@ class RebaseManager(GitCommandExecutor):
             num_patches = len(self.patch_applier.failing_patches)
             for i, (patch_file, _) in enumerate(self.patch_applier.failing_patches):
                 # Get the first conflicting file
-                file_path = self.diff_generator.patch_to_file[patch_file]
+                file_path = self.diff_generator.patch_to_file[patch_file.name]
 
                 # Create temporary files
                 base_file = os.path.join(
