@@ -310,6 +310,33 @@ def deploy_runners(args):
 
                         instance_action.note(f"Instance name: {instance_name}")
 
+                        # Get the AMI's block device mapping to find the correct root device name
+                        ami_info = ec2.describe_images(ImageIds=[ami_id])
+                        if not ami_info["Images"]:
+                            raise ValueError(f"AMI {ami_id} not found")
+
+                        ami_block_mappings = ami_info["Images"][0].get(
+                            "BlockDeviceMappings", []
+                        )
+                        root_device_name = None
+
+                        # Find the root device (usually the first EBS device)
+                        for mapping in ami_block_mappings:
+                            if mapping.get("Ebs"):
+                                root_device_name = mapping["DeviceName"]
+                                break
+
+                        if not root_device_name:
+                            # Fallback to common device names
+                            root_device_name = "/dev/xvda"
+                            instance_action.note(
+                                f"Could not determine root device from AMI, using default: {root_device_name}"
+                            )
+                        else:
+                            instance_action.note(
+                                f"Using root device from AMI: {root_device_name}"
+                            )
+
                         # Build run_instances parameters
                         run_params = {
                             "ImageId": ami_id,
@@ -320,7 +347,7 @@ def deploy_runners(args):
                             "SubnetId": subnet_id,
                             "BlockDeviceMappings": [
                                 {
-                                    "DeviceName": "/dev/xvda",  # Standard root device name
+                                    "DeviceName": root_device_name,
                                     "Ebs": {
                                         "VolumeSize": disk_size,
                                         "VolumeType": "gp3",  # Use GP3 for better performance
