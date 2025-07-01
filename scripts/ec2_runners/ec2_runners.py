@@ -132,9 +132,13 @@ def deploy_runners(args):
             repo = config["repo"]
             region = config["region"]
             runner_configs = config["runners"]
+            default_disk_size = config.get(
+                "default_disk_size", 20
+            )  # Default to 20 GB if not specified
             action.note(f"Repository: {repo}")
             action.note(f"Region: {region}")
             action.note(f"Runner configurations: {len(runner_configs)}")
+            action.note(f"Default disk size: {default_disk_size} GB")
 
         # Get networking configuration from config file
         vpc_id = config.get("vpc_id")
@@ -254,11 +258,13 @@ def deploy_runners(args):
             ami_id = runner_config["ami_id"]
             count = runner_config["count"]
             labels = runner_config["labels"]
+            disk_size = runner_config.get("disk_size", default_disk_size)
 
             with Action(f"Processing runner config: {instance_type}") as action:
                 action.note(f"Instance type: {instance_type}")
                 action.note(f"AMI: {ami_id}")
                 action.note(f"Target count: {count}")
+                action.note(f"Disk size: {disk_size} GB")
                 action.note(f"Labels: {', '.join(labels)}")
 
                 # Check existing instances
@@ -283,11 +289,6 @@ def deploy_runners(args):
 
                 action.note(f"Will create {instances_to_create} new instance(s)")
 
-                user_data = user_data_template.replace(
-                    "${github_repo_url}", f"https://github.com/{repo}"
-                )
-                user_data = user_data.replace("${runner_labels}", ",".join(labels))
-
                 # Create unique instance name with timestamp and index
                 timestamp = int(time.time())
                 for i in range(instances_to_create):
@@ -298,8 +299,14 @@ def deploy_runners(args):
 
                         instance_name = f"github-ec2-runner-{repo.replace('/', '-')}-{instance_type}-{timestamp}-{i+1}"
 
-                        user_data = user_data.replace("${runner_token}", reg_token)
-                        user_data = user_data.replace("${runner_name}", instance_name)
+                        user_data = (
+                            user_data_template.replace(
+                                "${github_repo_url}", f"https://github.com/{repo}"
+                            )
+                            .replace("${runner_labels}", ",".join(labels))
+                            .replace("${runner_token}", reg_token)
+                            .replace("${runner_name}", instance_name)
+                        )
 
                         instance_action.note(f"Instance name: {instance_name}")
 
@@ -311,6 +318,16 @@ def deploy_runners(args):
                             "MaxCount": 1,
                             "UserData": user_data,
                             "SubnetId": subnet_id,
+                            "BlockDeviceMappings": [
+                                {
+                                    "DeviceName": "/dev/xvda",  # Standard root device name
+                                    "Ebs": {
+                                        "VolumeSize": disk_size,
+                                        "VolumeType": "gp3",  # Use GP3 for better performance
+                                        "DeleteOnTermination": True,
+                                    },
+                                }
+                            ],
                             "TagSpecifications": [
                                 {
                                     "ResourceType": "instance",
