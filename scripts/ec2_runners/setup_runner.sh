@@ -63,12 +63,15 @@ log "Updating system packages..."
 case $PKG_MANAGER in
     apt)
         apt-get update -y
+        apt-get upgrade -y
         ;;
     dnf)
         dnf update -y
+        dnf upgrade -y
         ;;
     yum)
         yum update -y
+        yum upgrade -y
         ;;
 esac
 
@@ -76,7 +79,22 @@ esac
 log "Installing required packages..."
 case $PKG_MANAGER in
     apt)
-        apt-get install -y docker.io libicu-dev jq curl
+        apt-get install -y libicu-dev jq curl
+
+        # Install Docker from official repository for newer version
+        log "Installing Docker from official repository..."
+        apt-get install -y ca-certificates curl gnupg lsb-release
+
+        # Add Docker's official GPG key
+        mkdir -p /etc/apt/keyrings
+        curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+
+        # Add Docker repository
+        echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+        # Update package list and install Docker
+        apt-get update
+        apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin
         ;;
     dnf)
         dnf install -y docker libicu jq curl
@@ -96,6 +114,26 @@ if ! command_exists jq; then
     log "ERROR: jq not installed"
     exit 1
 fi
+
+if ! command_exists python3; then
+    log "ERROR: python3 not installed"
+    exit 1
+fi
+
+# Verify pip is available
+if ! command_exists pip3; then
+    log "ERROR: pip3 not installed"
+    exit 1
+fi
+
+# Check Python version
+log "Python version: $(python3 --version 2>&1)"
+
+# Check disk space
+log "Checking available disk space..."
+df -h /
+log "Disk space summary:"
+df -h | grep -E "(Filesystem|/$)" || true
 
 # Install and configure Docker
 log "Installing and configuring Docker..."
