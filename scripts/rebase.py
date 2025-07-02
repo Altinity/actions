@@ -51,8 +51,10 @@ class DiffGenerator(GitCommandExecutor):
         self.ci_directories = {
             ".github",
             "docker",
+            "contrib",
             "tests/ci",
             "tests/docker_scripts/",
+            "tests/config/config.d/azure_storage_conf.xml",
             "tests/broken_tests.json",
             # We need to include tweaks to the test runner and update some hardcoded docker image names.
             # Note to user: do not carry forward custom integration tests at this stage.
