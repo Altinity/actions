@@ -87,6 +87,8 @@ runners:
       - custom-label
 ```
 
+The instance type and ami will automatically be added to the labels: `type-ec2-${instance_type}, ${ami_id}`
+
 ### Environment Variable Syntax
 
 The config supports these patterns:

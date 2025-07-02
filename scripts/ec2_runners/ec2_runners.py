@@ -138,15 +138,14 @@ def get_existing_instances(ec2, repo, labels):
     # Match instances to GitHub runners by name
     matching_instances = []
     for instance in all_instances:
-        instance_name = None
-        for tag in instance.get("Tags", []):
-            if tag["Key"] == "Name":
-                instance_name = tag["Value"]
-                break
-
-        if instance_name and any(
-            runner.get("name") == instance_name for runner in matching_runners
-        ):
+        instance_name = get_instance_name_from_tags(instance)
+        if instance_name:
+            for runner in matching_runners:
+                if runner.get("name") == instance_name:
+                    matching_instances.append(instance)
+                    break
+        else:
+            print(f"Instance {instance['InstanceId']} has no name tag")
             matching_instances.append(instance)
 
     return matching_instances
@@ -306,6 +305,7 @@ def create_runner_instance(
                 "Tags": [
                     {"Key": "Name", "Value": instance_name},
                     {"Key": "GitHubRepo", "Value": repo},
+                    {"Key": "Purpose", "Value": "github-runner"},
                 ],
             },
         ],
@@ -819,7 +819,7 @@ def get_instance_name_from_tags(instance):
     for tag in instance.get("Tags", []):
         if tag["Key"] == "Name":
             return tag["Value"]
-    return "Unknown"
+    return None
 
 
 def validate_networking_config(config):
