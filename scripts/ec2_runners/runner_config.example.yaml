@@ -1,15 +1,15 @@
 repo: "owner/repo"
-vpc_id: "vpc-xxxxx"
-subnet_id: "subnet-xxxxx"
-#security_group_id: "sg-xxxxx" # Optional: will create one if not specified
+region: "${AWS_REGION:us-east-1}"
+vpc_id: "${AWS_VPC_ID}"
+subnet_id: "${AWS_SUBNET_ID}"
+# security_group_id: "${AWS_SECURITY_GROUP_ID}"  # Optional: will create one if not specified
 
 # Default disk configuration (in GB)
 # Can be overridden per runner
-default_disk_size: 20  # 100 GB root volume
+default_disk_size: 40
 runners:
   - instance_type: "t4g.xlarge" 
     ami_id: "ami-07041441b708acbd6" # Ubuntu Server 24.04 LTS
-    # disk_size: 150  # Optional: override default disk size (in GB)
     count: 1
     labels:
       - self-hosted
@@ -21,6 +21,7 @@ runners:
       - label3
   - instance_type: "m6g.4xlarge"
     ami_id: "ami-07041441b708acbd6" # Ubuntu Server 24.04 LTS
+    # disk_size: 100  # Optional: override default disk size (in GB)
     count: 1
     labels:
       - self-hosted

@@ -297,7 +297,7 @@ def deploy_runners(args):
             repo = config["repo"]
             region = config["region"]
             runner_configs = config["runners"]
-            default_disk_size = config.get("default_disk_size", 20)
+            default_disk_size = config.get("default_disk_size", 40)
             action.note(f"Repository: {repo}")
             action.note(f"Region: {region}")
             action.note(f"Runner configurations: {len(runner_configs)}")
@@ -640,15 +640,43 @@ def list_runners(args):
 
 
 def load_config(config_path):
-    """Load and validate configuration from YAML file."""
+    """Load and validate configuration from YAML file with environment variable support."""
     with open(config_path, "r") as f:
-        config = yaml.safe_load(f)
+        content = f.read()
+
+    # Replace environment variables in the content
+    import re
+
+    def replace_env_var(match):
+        var_name = match.group(1)
+        default_value = match.group(2) if match.group(2) else None
+        env_value = os.getenv(var_name)
+        if env_value is not None:
+            return env_value
+        elif default_value is not None:
+            return default_value
+        else:
+            raise ValueError(f"Environment variable {var_name} is required but not set")
+
+    # Replace ${VAR_NAME} or ${VAR_NAME:default_value} patterns
+    content = re.sub(r"\$\{([^:}]+)(?::([^}]*))?\}", replace_env_var, content)
+
+    config = yaml.safe_load(content)
 
     # Validate required fields
     required_fields = ["repo", "region", "runners"]
     for field in required_fields:
         if field not in config:
             raise ValueError(f"Missing required field '{field}' in config file")
+
+    # Add automatic labels to runner configs
+    for runner_config in config["runners"]:
+        runner_config["labels"].extend(
+            [
+                f"type-ec2-{runner_config['instance_type']}",
+                runner_config["ami_id"],
+            ]
+        )
 
     return config
 
