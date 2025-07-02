@@ -13,16 +13,40 @@ script_dir = Path(__file__).absolute()
 parent_dir = script_dir.parent.parent  # Go up two levels to reach scripts/
 sys.path.append(str(parent_dir))
 
-from lib.actions import Action
+from lib.actions import Action, OperationResult
 
 Action.set_logger("ec2_runners")
+
+
+class EC2RunnerError(Exception):
+    """Base exception for EC2 runner operations."""
+
+    pass
+
+
+class ConfigurationError(EC2RunnerError):
+    """Configuration-related errors."""
+
+    pass
+
+
+class GitHubAPIError(EC2RunnerError):
+    """GitHub API-related errors."""
+
+    pass
+
+
+class AWSAPIError(EC2RunnerError):
+    """AWS API-related errors."""
+
+    pass
 
 
 def get_github_token():
     """Retrieves the GitHub token from the environment variable."""
     token = os.getenv("GITHUB_TOKEN")
     if not token:
-        raise ValueError("GITHUB_TOKEN environment variable not set.")
+        raise ConfigurationError("GITHUB_TOKEN environment variable not set.")
     return token
 
 
@@ -35,9 +59,12 @@ def get_runner_registration_token(github_repo, token):
         "Authorization": f"token {token}",
         "Accept": "application/vnd.github.v3+json",
     }
-    response = requests.post(url, headers=headers)
-    response.raise_for_status()
-    return response.json()["token"]
+    try:
+        response = requests.post(url, headers=headers)
+        response.raise_for_status()
+        return response.json()["token"]
+    except requests.exceptions.RequestException as e:
+        raise GitHubAPIError(f"Failed to get registration token: {e}")
 
 
 def get_github_runners(repo, token):
@@ -47,9 +74,12 @@ def get_github_runners(repo, token):
         "Authorization": f"token {token}",
         "Accept": "application/vnd.github.v3+json",
     }
-    response = requests.get(url, headers=headers)
-    response.raise_for_status()
-    return response.json()["runners"]
+    try:
+        response = requests.get(url, headers=headers)
+        response.raise_for_status()
+        return response.json()["runners"]
+    except requests.exceptions.RequestException as e:
+        raise GitHubAPIError(f"Failed to get runners: {e}")
 
 
 def remove_github_runner(repo, token, runner_id):
@@ -59,12 +89,16 @@ def remove_github_runner(repo, token, runner_id):
         "Authorization": f"token {token}",
         "Accept": "application/vnd.github.v3+json",
     }
-    response = requests.delete(url, headers=headers)
-    if response.status_code == 204:
-        return True
-    else:
-        print(f"Failed to remove runner {runner_id}: {response.status_code}")
-        return False
+    try:
+        response = requests.delete(url, headers=headers)
+        if response.status_code == 204:
+            return True
+        else:
+            raise GitHubAPIError(
+                f"Failed to remove runner {runner_id}: {response.status_code}"
+            )
+    except requests.exceptions.RequestException as e:
+        raise GitHubAPIError(f"Failed to remove runner {runner_id}: {e}")
 
 
 def get_github_runners_by_labels(repo, token, target_labels):
@@ -287,12 +321,14 @@ def create_runner_instance(
 
 def deploy_runners(args):
     """Deploy GitHub self-hosted runners on EC2."""
-    try:
-        with Action("Getting GitHub token") as action:
-            github_token = get_github_token()
-            action.note("GitHub token retrieved successfully")
+    result = OperationResult()
 
-        with Action("Loading configuration") as action:
+    try:
+        with Action("Getting GitHub token", ignore_fail=False) as action:
+            github_token = get_github_token()
+            action.success("GitHub token retrieved successfully")
+
+        with Action("Loading configuration", ignore_fail=False) as action:
             config = load_config(args.config)
             repo = config["repo"]
             region = config["region"]
@@ -307,26 +343,36 @@ def deploy_runners(args):
         vpc_id, subnet_id = validate_networking_config(config)
         security_group_id = config.get("security_group_id")
 
-        with Action("Loading user data script") as action:
-            with open(args.user_data, "r") as f:
-                user_data_template = f.read()
-            action.note(f"User data script loaded: {args.user_data}")
+        with Action("Loading user data script", ignore_fail=False) as action:
+            try:
+                with open(args.user_data, "r") as f:
+                    user_data_template = f.read()
+                action.success(f"User data script loaded: {args.user_data}")
+            except FileNotFoundError:
+                action.error(f"User data script not found: {args.user_data}")
+                raise ConfigurationError(
+                    f"User data script not found: {args.user_data}"
+                )
 
         ec2 = boto3.client("ec2", region_name=region)
 
         # Create security group if not specified
         if not security_group_id:
-            with Action("Setting up security group") as action:
+            with Action("Setting up security group", ignore_fail=False) as action:
                 try:
                     security_group_id, message = create_security_group(
                         ec2, repo, vpc_id
                     )
-                    action.note(message)
+                    action.success(message)
+                    result.add_success("Security group created")
                 except Exception as e:
-                    action.note(f"Error creating security group: {e}")
-                    action.note("Cannot continue without proper security group")
-                    return
+                    action.error(f"Error creating security group: {e}")
+                    result.add_failure(f"Security group creation failed: {e}")
+                    raise AWSAPIError(
+                        f"Cannot continue without proper security group: {e}"
+                    )
 
+        # Process each runner configuration
         for runner_config in runner_configs:
             instance_type = runner_config["instance_type"]
             count = runner_config["count"]
@@ -341,10 +387,13 @@ def deploy_runners(args):
                 action.note(f"Labels: {', '.join(labels)}")
 
                 # Check existing instances
-                existing_instances = get_existing_instances(ec2, repo, labels)
-                existing_count = len(existing_instances)
-
-                action.note(f"Found {existing_count} existing instance(s)")
+                try:
+                    existing_instances = get_existing_instances(ec2, repo, labels)
+                    existing_count = len(existing_instances)
+                    action.note(f"Found {existing_count} existing instance(s)")
+                except Exception as e:
+                    action.warning(f"Failed to check existing instances: {e}")
+                    existing_count = 0
 
                 if existing_count >= count and not args.force:
                     action.note(
@@ -362,8 +411,10 @@ def deploy_runners(args):
 
                 action.note(f"Will create {instances_to_create} new instance(s)")
 
-                # Create unique instance name with timestamp and index
+                # Create instances
                 timestamp = int(time.time())
+                config_success_count = 0
+
                 for i in range(instances_to_create):
                     with Action(
                         f"Creating instance {i+1}/{instances_to_create}"
@@ -381,17 +432,54 @@ def deploy_runners(args):
                                 i,
                                 args,
                             )
-                            instance_action.note(f"Instance name: {instance_name}")
-                            instance_action.note(
+                            instance_action.success(f"Instance name: {instance_name}")
+                            instance_action.success(
                                 f"Successfully launched: {instance_id}"
                             )
+                            result.add_success(
+                                f"Instance {instance_name} ({instance_id}) created"
+                            )
+                            config_success_count += 1
                         except Exception as e:
-                            instance_action.note(f"Failed to create instance: {e}")
+                            instance_action.error(f"Failed to create instance: {e}")
+                            result.add_failure(f"Instance creation failed: {e}")
 
-    except (ValueError, FileNotFoundError, requests.exceptions.RequestException) as e:
+                # Summary for this config
+                if config_success_count == instances_to_create:
+                    action.success(
+                        f"All {instances_to_create} instances created successfully"
+                    )
+                elif config_success_count > 0:
+                    action.warning(
+                        f"Partial success: {config_success_count}/{instances_to_create} instances created"
+                    )
+                else:
+                    action.error(f"Failed to create any instances for {instance_type}")
+
+        # Final summary
+        with Action("Deployment Summary") as action:
+            action.note(result.summary())
+            if result.warnings:
+                action.note("Warnings:")
+                for warning in result.warnings:
+                    action.note(f"  {warning}")
+            if result.errors:
+                action.note("Errors:")
+                for error in result.errors:
+                    action.note(f"  {error}")
+
+        # Return appropriate exit code
+        if not result.is_success():
+            sys.exit(1)
+        else:
+            sys.exit(0)
+
+    except (ConfigurationError, GitHubAPIError, AWSAPIError) as e:
         print(f"Error: {e}")
+        sys.exit(1)
     except Exception as e:
         print(f"An unexpected error occurred: {e}")
+        sys.exit(1)
 
 
 def find_instances_to_terminate(ec2, repo, labels):
@@ -453,12 +541,15 @@ def terminate_single_instance(ec2, instance, runner_map, repo, github_token):
 
 def undeploy_runners(args):
     """Undeploy GitHub self-hosted runners from EC2."""
-    try:
-        with Action("Getting GitHub token") as action:
-            github_token = get_github_token()
-            action.note("GitHub token retrieved successfully")
+    result = OperationResult()
 
-        with Action("Loading configuration") as action:
+    try:
+        with Action("Getting GitHub token", ignore_fail=False) as action:
+            github_token = get_github_token()
+            action.success("GitHub token retrieved successfully")
+            result.add_success("GitHub token retrieved")
+
+        with Action("Loading configuration", ignore_fail=False) as action:
             config = load_config(args.config)
             repo = args.repo or config["repo"]
             region = config["region"]
@@ -469,19 +560,27 @@ def undeploy_runners(args):
                 action.note(f"Label filter: {labels}")
             else:
                 action.note("No label filter - will find all instances")
+            result.add_success("Configuration loaded")
 
         ec2 = boto3.client("ec2", region_name=region)
 
         # Find instances to terminate
         with Action("Finding instances to terminate") as action:
-            instances = find_instances_to_terminate(ec2, repo, labels)
-            action.note(f"Found {len(instances)} instances")
+            try:
+                instances = find_instances_to_terminate(ec2, repo, labels)
+                action.note(f"Found {len(instances)} instances")
+                result.add_success(f"Found {len(instances)} instances to terminate")
+            except Exception as e:
+                action.error(f"Failed to find instances: {e}")
+                result.add_failure(f"Failed to find instances: {e}")
+                raise AWSAPIError(f"Failed to find instances: {e}")
 
         if not instances:
             with Action("No instances found") as action:
                 action.note(f"Repository: {repo}")
                 if labels:
                     action.note(f"Labels: {labels}")
+                action.success("No instances to terminate")
             return
 
         with Action("Preparing to terminate instances") as action:
@@ -494,12 +593,19 @@ def undeploy_runners(args):
                 response = input("\nDo you want to terminate these instances? (y/N): ")
                 if response.lower() != "y":
                     action.note("Operation cancelled by user")
+                    result.add_success("Operation cancelled by user")
                     return
 
         # Get GitHub runners to match with instances
         with Action("Fetching GitHub runners") as action:
-            runner_map = get_runner_mapping(repo, github_token)
-            action.note(f"Found {len(runner_map)} GitHub runners to deregister")
+            try:
+                runner_map = get_runner_mapping(repo, github_token)
+                action.note(f"Found {len(runner_map)} GitHub runners to deregister")
+                result.add_success(f"Found {len(runner_map)} GitHub runners")
+            except Exception as e:
+                action.warning(f"Failed to fetch GitHub runners: {e}")
+                result.add_warning(f"Failed to fetch GitHub runners: {e}")
+                runner_map = {}
 
         # Terminate instances and deregister runners
         terminated_count = 0
@@ -516,35 +622,62 @@ def undeploy_runners(args):
                 if instance_name in runner_map:
                     runner_id = runner_map[instance_name]
                     action.note(f"Deregistering runner from GitHub (ID: {runner_id})")
-                    if remove_github_runner(repo, github_token, runner_id):
-                        action.note("✅ Runner deregistered successfully")
-                        deregistered_count += 1
-                    else:
-                        action.note("⚠️  Failed to deregister runner, but continuing")
+                    try:
+                        if remove_github_runner(repo, github_token, runner_id):
+                            action.success("Runner deregistered successfully")
+                            deregistered_count += 1
+                            result.add_success(f"Runner {instance_name} deregistered")
+                        else:
+                            action.warning(
+                                "Failed to deregister runner, but continuing"
+                            )
+                            result.add_warning(
+                                f"Failed to deregister runner {instance_name}"
+                            )
+                    except Exception as e:
+                        action.warning(f"Failed to deregister runner: {e}")
+                        result.add_warning(
+                            f"Failed to deregister runner {instance_name}: {e}"
+                        )
                 else:
-                    action.note("⚠️  No matching GitHub runner found")
+                    action.note("No matching GitHub runner found")
 
                 # Terminate the EC2 instance
                 try:
                     ec2.terminate_instances(InstanceIds=[instance_id])
-                    action.note("✅ Instance terminated successfully")
+                    action.success("Instance terminated successfully")
                     terminated_count += 1
+                    result.add_success(
+                        f"Instance {instance_name} ({instance_id}) terminated"
+                    )
                 except Exception as e:
-                    action.note(f"❌ Failed to terminate instance: {e}")
+                    action.error(f"Failed to terminate instance: {e}")
+                    result.add_failure(
+                        f"Failed to terminate instance {instance_name}: {e}"
+                    )
 
         with Action("Summary") as action:
             action.note(f"Instances terminated: {terminated_count}/{len(instances)}")
             action.note(f"Runners deregistered: {deregistered_count}/{len(instances)}")
+            action.note(result.summary())
 
             if terminated_count > 0:
                 action.note(
                     "Note: It may take a few minutes for runners to disappear from GitHub."
                 )
 
-    except (ValueError, FileNotFoundError, requests.exceptions.RequestException) as e:
+        # Return appropriate exit code
+        if not result.is_success():
+            sys.exit(1)
+        else:
+            sys.exit(0)
+
+    except (ConfigurationError, GitHubAPIError, AWSAPIError) as e:
         print(f"Error: {e}")
+        sys.exit(1)
     except Exception as e:
         print(f"An unexpected error occurred: {e}")
+        sys.exit(1)
 
 
 def display_github_runners(github_runners):
@@ -785,14 +918,21 @@ Examples:
 
     if not args.command:
         parser.print_help()
-        return
+        sys.exit(0)
 
-    if args.command == "deploy":
-        deploy_runners(args)
-    elif args.command == "undeploy":
-        undeploy_runners(args)
-    elif args.command == "list":
-        list_runners(args)
+    try:
+        if args.command == "deploy":
+            deploy_runners(args)
+        elif args.command == "undeploy":
+            undeploy_runners(args)
+        elif args.command == "list":
+            list_runners(args)
+    except KeyboardInterrupt:
+        print("\nOperation cancelled by user")
+        sys.exit(1)
+    except Exception as e:
+        print(f"Unexpected error: {e}")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

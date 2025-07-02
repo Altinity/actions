@@ -84,13 +84,27 @@ class Action:
         )
         return self
 
-    def note(self, message, stacklevel=None):
+    def note(self, message, stacklevel=None, level=None):
+        """Add a note with optional level override."""
+        log_level = level if level is not None else self.level
         self.logger.log(
             msg=f"   {message}",
             stacklevel=(self.stacklevel + 1) if stacklevel is None else stacklevel,
-            level=self.level,
+            level=log_level,
             extra=self.extra,
         )
+
+    def warning(self, message, stacklevel=None):
+        """Add a warning note."""
+        self.note(f"⚠️  {message}", stacklevel=stacklevel, level=logging.WARNING)
+
+    def error(self, message, stacklevel=None):
+        """Add an error note."""
+        self.note(f"❌ {message}", stacklevel=stacklevel, level=logging.ERROR)
+
+    def success(self, message, stacklevel=None):
+        """Add a success note."""
+        self.note(f"✅ {message}", stacklevel=stacklevel, level=logging.INFO)
 
     def __exit__(self, exc_type, exc_value, exc_traceback):
         if exc_value is not None:
@@ -118,3 +132,38 @@ class Action:
                 return True
 
             return False
+
+
+class OperationResult:
+    """Track the results of an operation."""
+
+    def __init__(self):
+        self.success_count = 0
+        self.failure_count = 0
+        self.warnings = []
+        self.errors = []
+        self.details = []
+
+    def add_success(self, detail=""):
+        self.success_count += 1
+        if detail:
+            self.details.append(f"✅ {detail}")
+
+    def add_failure(self, detail=""):
+        self.failure_count += 1
+        if detail:
+            self.errors.append(f"❌ {detail}")
+
+    def add_warning(self, detail=""):
+        if detail:
+            self.warnings.append(f"⚠️  {detail}")
+
+    def is_success(self):
+        return self.failure_count == 0
+
+    def summary(self):
+        """Return a summary string."""
+        parts = [f"Success: {self.success_count}, Failures: {self.failure_count}"]
+        if self.warnings:
+            parts.append(f"Warnings: {len(self.warnings)}")
+        return " | ".join(parts)
