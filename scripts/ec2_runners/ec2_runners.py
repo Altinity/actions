@@ -17,6 +17,7 @@ from lib.actions import Action, OperationResult
 
 Action.set_logger("ec2_runners")
 
+RUNNER_NAME_PREFIX = "github-ec2-runner"
 
 class EC2RunnerError(Exception):
     """Base exception for EC2 runner operations."""
@@ -261,6 +262,7 @@ def create_runner_instance(
     timestamp,
     index,
     args,
+    global_setup_steps=None,
 ):
     """Create a single runner instance."""
     instance_type = runner_config["instance_type"]
@@ -269,13 +271,41 @@ def create_runner_instance(
     disk_size = runner_config.get("disk_size", 20)
 
     reg_token = get_runner_registration_token(repo, github_token)
-    instance_name = f"github-ec2-runner-{repo.replace('/', '-')}-{instance_type}-{timestamp}-{index+1}"
+    instance_name = (
+        f"{RUNNER_NAME_PREFIX}-{repo.split('/')[1]}-{instance_type}-{timestamp}-{index+1}"
+    )
+    assert len(instance_name) <= 64, "Instance name must be at most 64 characters"
+
+    # Prepare setup steps for this runner
+    runner_setup_steps = runner_config.get("setup_steps", [])
+    all_setup_steps = []
+
+    # Add global setup steps first
+    if global_setup_steps:
+        all_setup_steps.extend(global_setup_steps)
+
+    # Add runner-specific setup steps
+    all_setup_steps.extend(runner_setup_steps)
+
+    # Convert setup steps to shell script format
+    setup_script = ""
+    if all_setup_steps:
+        setup_script = "\n# Custom setup steps\n"
+        for step in all_setup_steps:
+            step_name = step.get("name", "Custom step")
+            commands = step.get("commands", [])
+            if commands:
+                setup_script += f'\nlog "Running: {step_name}"\n'
+                for command in commands:
+                    setup_script += f"{command}\n"
+                setup_script += f'log "Completed: {step_name}"\n'
 
     user_data = (
         user_data_template.replace("${github_repo_url}", f"https://github.com/{repo}")
         .replace("${runner_labels}", ",".join(labels))
         .replace("${runner_token}", reg_token)
         .replace("${runner_name}", instance_name)
+        .replace("${custom_setup_steps}", setup_script)
     )
 
     # Get the AMI's root device name
@@ -334,10 +364,12 @@ def deploy_runners(args):
             region = config["region"]
             runner_configs = config["runners"]
             default_disk_size = config.get("default_disk_size", 40)
+            global_setup_steps = config.get("setup_steps", [])
             action.note(f"Repository: {repo}")
             action.note(f"Region: {region}")
             action.note(f"Runner configurations: {len(runner_configs)}")
             action.note(f"Default disk size: {default_disk_size} GB")
+            action.note(f"Global setup steps: {len(global_setup_steps)}")
 
         # Get networking configuration from config file
         vpc_id, subnet_id = validate_networking_config(config)
@@ -431,6 +463,7 @@ def deploy_runners(args):
                                 timestamp,
                                 i,
                                 args,
+                                global_setup_steps,
                             )
                             instance_action.success(f"Instance name: {instance_name}")
                             instance_action.success(
@@ -512,7 +545,7 @@ def get_runner_mapping(repo, github_token):
     runner_map = {}
     for runner in github_runners:
         runner_name = runner.get("name", "")
-        if "github-ec2-runner" in runner_name:
+        if RUNNER_NAME_PREFIX in runner_name:
             runner_map[runner_name] = runner["id"]
 
     return runner_map
@@ -685,7 +718,7 @@ def display_github_runners(github_runners):
     # Filter for EC2 runners
     ec2_runners = []
     for runner in github_runners:
-        if "github-ec2-runner" in runner.get("name", ""):
+        if RUNNER_NAME_PREFIX in runner.get("name", ""):
             ec2_runners.append(runner)
 
     print(f"EC2 runners: {len(ec2_runners)}")

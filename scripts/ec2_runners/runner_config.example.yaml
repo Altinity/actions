@@ -1,33 +1,47 @@
-repo: "owner/repo"
-region: "${AWS_REGION:us-east-1}"
-vpc_id: "${AWS_VPC_ID}"
-subnet_id: "${AWS_SUBNET_ID}"
-# security_group_id: "${AWS_SECURITY_GROUP_ID}"  # Optional: will create one if not specified
+# GitHub EC2 Runners Configuration Template
+# Copy this file to runner_config.yaml and customize for your needs
+
+repo: "owner/repo"                    # GitHub repository or organization
+region: "${AWS_REGION:us-east-1}"     # AWS region with default
+vpc_id: "${AWS_VPC_ID}"              # VPC ID (required)
+subnet_id: "${AWS_SUBNET_ID}"        # Subnet ID (required)
+# security_group_id: "${AWS_SECURITY_GROUP_ID:null}"  # Optional: auto-created if not specified
 
 # Default disk configuration (in GB)
 # Can be overridden per runner
 default_disk_size: 40
+
+# Global setup steps that run for ALL runners
+# These are executed before runner-specific setup steps
+setup_steps:
+  - name: "Install common packages"
+    commands:
+      - "apt-get install -y curl wget jq"
+
 runners:
-  - instance_type: "t4g.xlarge" 
-    ami_id: "ami-07041441b708acbd6" # Ubuntu Server 24.04 LTS
+  - instance_type: "t4g.xlarge"
+    ami_id: "ami-xxxxxxxxx"          # Ubuntu 22.04 LTS ARM64
     count: 1
+    disk_size: 50                    # Optional: override default disk size
     labels:
       - self-hosted
       - Linux
       - ARM64
-      - type-t4g.xlarge
-      - label1
-      - label2
-      - label3
-  - instance_type: "m6g.4xlarge"
-    ami_id: "ami-07041441b708acbd6" # Ubuntu Server 24.04 LTS
-    # disk_size: 100  # Optional: override default disk size (in GB)
+      - arm-runner
+
+    setup_steps:
+      - name: "Install ARM-specific packages"
+        commands:
+          - "apt-get install -y gcc-aarch64-linux-gnu"
+          - "pip3 install crossenv"
+
+# Example with no custom setup steps (uses only global setup)
+  - instance_type: "t3.micro"
+    ami_id: "ami-xxxxxxxxx"
     count: 1
     labels:
       - self-hosted
       - Linux
-      - ARM64
-      - type-m6g.4xlarge
-      - label1
-      - label2
-      - label3
+      - x64
+      - minimal-runner
+    # No setup_steps section - will only run global setup steps

@@ -79,7 +79,7 @@ esac
 log "Installing required packages..."
 case $PKG_MANAGER in
     apt)
-        apt-get install -y libicu-dev jq curl
+        apt-get install -y jq curl
 
         # Install Docker from official repository for newer version
         log "Installing Docker from official repository..."
@@ -97,10 +97,10 @@ case $PKG_MANAGER in
         apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin
         ;;
     dnf)
-        dnf install -y docker libicu jq curl
+        dnf install -y docker jq curl
         ;;
     yum)
-        yum install -y docker libicu jq curl
+        yum install -y docker jq curl
         ;;
 esac
 
@@ -214,6 +214,9 @@ case $ARCH in
 esac
 
 log "Architecture: $ARCH -> $RUNNER_ARCH"
+
+# Custom setup steps will be inserted here
+${custom_setup_steps}
 
 # Get latest runner version
 log "Getting latest runner version..."
