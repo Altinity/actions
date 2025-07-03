@@ -79,7 +79,7 @@ esac
 log "Installing required packages..."
 case $PKG_MANAGER in
     apt)
-        apt-get install -y jq curl
+        apt-get install -y jq curl fail2ban
 
         # Install Docker from official repository for newer version
         log "Installing Docker from official repository..."
@@ -95,12 +95,18 @@ case $PKG_MANAGER in
         # Update package list and install Docker
         apt-get update
         apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin
+
+        log "Installing github cli..."
+        curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+        echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+        apt-get update
+        apt-get install -y gh
         ;;
     dnf)
-        dnf install -y docker jq curl
+        dnf install -y docker jq curl fail2ban
         ;;
     yum)
-        yum install -y docker jq curl
+        yum install -y docker jq curl fail2ban
         ;;
 esac
 
@@ -134,6 +140,10 @@ log "Checking available disk space..."
 df -h /
 log "Disk space summary:"
 df -h | grep -E "(Filesystem|/$)" || true
+
+log "Checking fail2ban..."
+fail2ban-client status
+systemctl status fail2ban || true
 
 # Install and configure Docker
 log "Installing and configuring Docker..."
