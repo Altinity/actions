@@ -640,25 +640,33 @@ def undeploy_runners(args):
                 result.add_warning(f"Failed to fetch GitHub runners: {e}")
                 runner_map = {}
 
-        # Terminate instances and deregister runners
-        terminated_count = 0
-        deregistered_count = 0
-
+        # Enrich instances with runner_id
         for instance in instances:
-            instance_id = instance["InstanceId"]
             instance_name = get_instance_name_from_tags(instance)
+            instance["runner_id"] = runner_map.get(instance_name)
+            instance["instance_name"] = instance_name
 
+        counter = {"terminated": 0, "deregistered": 0}
+        total = len(instances)
+        polling_interval = 30  # seconds
+        timeout_minutes = getattr(args, "wait_timeout", 30)
+        timeout_seconds = timeout_minutes * 60
+        start_time = time.time()
+
+        def deregister_and_terminate(instance, force_note=None):
+            instance_id = instance["InstanceId"]
+            instance_name = instance["instance_name"]
+            runner_id = instance["runner_id"]
             with Action(f"Terminating instance: {instance_id}") as action:
+                if force_note:
+                    action.note(force_note)
                 action.note(f"Instance name: {instance_name}")
-
-                # Try to deregister the runner from GitHub first
-                if instance_name in runner_map:
-                    runner_id = runner_map[instance_name]
+                if runner_id:
                     action.note(f"Deregistering runner from GitHub (ID: {runner_id})")
                     try:
                         if remove_github_runner(repo, github_token, runner_id):
                             action.success("Runner deregistered successfully")
-                            deregistered_count += 1
+                            counter["deregistered"] += 1
                             result.add_success(f"Runner {instance_name} deregistered")
                         else:
                             action.warning(
@@ -674,12 +682,10 @@ def undeploy_runners(args):
                         )
                 else:
                     action.note("No matching GitHub runner found")
-
-                # Terminate the EC2 instance
                 try:
                     ec2.terminate_instances(InstanceIds=[instance_id])
                     action.success("Instance terminated successfully")
-                    terminated_count += 1
+                    counter["terminated"] += 1
                     result.add_success(
                         f"Instance {instance_name} ({instance_id}) terminated"
                     )
@@ -689,21 +695,60 @@ def undeploy_runners(args):
                         f"Failed to terminate instance {instance_name}: {e}"
                     )
 
-        with Action("Summary") as action:
-            action.note(f"Instances terminated: {terminated_count}/{len(instances)}")
-            action.note(f"Runners deregistered: {deregistered_count}/{len(instances)}")
-            action.note(result.summary())
+        # Main rolling termination loop
+        remaining = instances.copy()
+        while remaining:
+            now = time.time()
+            if args.wait and not args.force and (now - start_time) < timeout_seconds:
+                # Poll status for all remaining runners
+                with Action(
+                    f"Polling runner status ({len(remaining)} remaining)"
+                ) as action:
+                    try:
+                        github_runners = get_github_runners(repo, github_token)
+                        runner_status_map = {r["id"]: r for r in github_runners}
+                    except Exception as e:
+                        action.warning(f"Failed to fetch runner status: {e}")
+                        runner_status_map = {}
+                    next_remaining = []
+                    for instance in remaining:
+                        runner_id = instance["runner_id"]
+                        instance_name = instance["instance_name"]
+                        busy = False
+                        if runner_id and runner_id in runner_status_map:
+                            busy = runner_status_map[runner_id].get("busy", False)
+                        if not busy:
+                            deregister_and_terminate(instance)
+                        else:
+                            next_remaining.append(instance)
+                            action.note(f"Runner {instance_name} is still busy")
+                    remaining = next_remaining
+                    action.note(
+                        f"Progress: {counter['terminated']}/{total} terminated, {len(remaining)} still busy"
+                    )
+                if remaining:
+                    time.sleep(polling_interval)
+            else:
+                # Either not waiting, forced, or timeout reached: terminate all remaining
+                force_note = None
+                if args.wait and not args.force and remaining:
+                    force_note = "Timeout reached or forced, terminating regardless of busy status."
+                for instance in remaining:
+                    deregister_and_terminate(instance, force_note=force_note)
+                break
 
-            if terminated_count > 0:
+        with Action("Summary") as action:
+            action.note(f"Instances terminated: {counter['terminated']}/{total}")
+            action.note(f"Runners deregistered: {counter['deregistered']}/{total}")
+            action.note(result.summary())
+            if counter["terminated"] > 0:
                 action.note(
                     "Note: It may take a few minutes for runners to disappear from GitHub."
                 )
-
-        # Return appropriate exit code
-        if not result.is_success():
-            sys.exit(1)
-        else:
-            sys.exit(0)
+            if not result.is_success():
+                sys.exit(1)
+            else:
+                sys.exit(0)
 
     except (ConfigurationError, GitHubAPIError, AWSAPIError) as e:
         print(f"Error: {e}")
@@ -931,6 +976,17 @@ Examples:
         "--force",
         action="store_true",
         help="Force termination without confirmation.",
+    )
+    undeploy_parser.add_argument(
+        "--wait",
+        action="store_true",
+        help="Wait for runners to become idle before terminating.",
+    )
+    undeploy_parser.add_argument(
+        "--wait-timeout",
+        type=int,
+        default=30,
+        help="Timeout in minutes for waiting for runners to become idle.",
     )
 
     # List command
