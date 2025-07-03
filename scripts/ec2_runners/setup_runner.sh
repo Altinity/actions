@@ -228,6 +228,81 @@ log "Architecture: $ARCH -> $RUNNER_ARCH"
 # Custom setup steps will be inserted here
 ${custom_setup_steps}
 
+# Set up post-job cleanup script
+log "Setting up post-job cleanup script..."
+
+# Create cleanup script that runs after each job
+cat > /usr/local/bin/runner-cleanup.sh << 'EOF'
+#!/bin/bash
+set -e
+
+# Function to log with timestamp
+log() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"
+}
+
+log "Starting post-job cleanup..."
+
+# Clean up Docker resources (this can be done as runner user)
+if command -v docker >/dev/null 2>&1; then
+    log "Cleaning up Docker resources..."
+    # Remove unused containers, networks, images
+    docker system prune -f 2>/dev/null || true
+    # Remove build cache
+    docker builder prune -f 2>/dev/null || true
+    # Note: We don't prune volumes here as they might be in use
+fi
+
+# Clean up GitHub Actions workspace
+# The script runs in the security context of the runner service
+if [ -d "/home/ubuntu/actions-runner/_work" ]; then
+    log "Cleaning up GitHub Actions workspace..."
+
+    # Find and remove _temp directories (these are safe to remove)
+    find /home/ubuntu/actions-runner/_work -type d -name "_temp" -exec rm -rf {} + 2>/dev/null || true
+
+    # Find and remove _instances directories
+    # Use sudo for these as they have root ownership from Docker bind mounts
+    find /home/ubuntu/actions-runner/_work -type d -name "_instances" -exec sudo rm -rf {} + 2>/dev/null || true
+
+    # Remove log files
+    find /home/ubuntu/actions-runner/_work -type f -name "*.log" -delete 2>/dev/null || true
+
+    # Remove any empty directories (but be careful not to remove the main structure)
+    find /home/ubuntu/actions-runner/_work -type d -empty -not -path "/home/ubuntu/actions-runner/_work" -delete 2>/dev/null || true
+
+    # Fix ownership of remaining files to ubuntu user
+    sudo chown -R ubuntu:ubuntu /home/ubuntu/actions-runner/_work 2>/dev/null || true
+fi
+
+# Clean up temporary files in user directories
+log "Cleaning up temporary files..."
+rm -rf /tmp/* 2>/dev/null || true
+rm -rf /var/tmp/* 2>/dev/null || true
+
+# Clean up zram devices to avoid "Device or resource busy" errors
+log "Cleaning up zram devices..."
+if command -v zramctl >/dev/null 2>&1; then
+    # List all zram devices and reset them
+    zramctl list | awk 'NR>1 {print $1}' | while read device; do
+        if [ -n "$device" ]; then
+            log "Resetting zram device: $device"
+            zramctl reset "$device" 2>/dev/null || true
+        fi
+    done
+fi
+
+log "Post-job cleanup completed"
+EOF
+
+# Make cleanup script executable
+chmod +x /usr/local/bin/runner-cleanup.sh
+
+# Configure sudo access for the cleanup script
+echo "$RUNNER_USER ALL=(ALL) NOPASSWD: /usr/local/bin/runner-cleanup.sh" > /etc/sudoers.d/runner-cleanup
+
+log "Post-job cleanup script configured"
+
 # Get latest runner version
 log "Getting latest runner version..."
 RUNNER_VERSION=$(curl -s -X GET 'https://api.github.com/repos/actions/runner/releases/latest' | jq -r '.tag_name' | sed 's/v//')
@@ -279,6 +354,20 @@ if ! su - $RUNNER_USER -c "cd /home/$RUNNER_USER/actions-runner && ./config.sh -
     log "ERROR: Failed to configure runner"
     exit 1
 fi
+
+# Configure runner to run cleanup after each job using official hooks
+log "Configuring post-job cleanup using GitHub Actions hooks..."
+
+# Create .env file in the runner directory to set the hook
+cat > /home/$RUNNER_USER/actions-runner/.env << EOF
+# GitHub Actions runner hooks
+ACTIONS_RUNNER_HOOK_JOB_COMPLETED=/usr/local/bin/runner-cleanup.sh
+EOF
+
+chown $RUNNER_USER:$RUNNER_USER /home/$RUNNER_USER/actions-runner/.env
+chmod 600 /home/$RUNNER_USER/actions-runner/.env
+
+log "Post-job cleanup configured using ACTIONS_RUNNER_HOOK_JOB_COMPLETED"
 
 # Install runner service with sudo (required)
 log "Installing runner service..."
