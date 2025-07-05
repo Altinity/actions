@@ -17,7 +17,7 @@ from lib.actions import Action, OperationResult
 
 Action.set_logger("ec2_runners")
 
-RUNNER_NAME_PREFIX = "github-ec2-runner"
+RUNNER_NAME_PREFIX = "gh-ec2-runner"
 
 class EC2RunnerError(Exception):
     """Base exception for EC2 runner operations."""
@@ -505,7 +505,7 @@ def deploy_runners(args):
         if not result.is_success():
             sys.exit(1)
         else:
-            sys.exit(0)
+            return
 
     except (ConfigurationError, GitHubAPIError, AWSAPIError) as e:
         print(f"Error: {e}")
@@ -747,8 +747,7 @@ def undeploy_runners(args):
                 )
             if not result.is_success():
                 sys.exit(1)
-            else:
-                sys.exit(0)
+            return
 
     except (ConfigurationError, GitHubAPIError, AWSAPIError) as e:
         print(f"Error: {e}")

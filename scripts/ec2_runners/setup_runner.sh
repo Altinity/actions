@@ -79,7 +79,7 @@ esac
 log "Installing required packages..."
 case $PKG_MANAGER in
     apt)
-        apt-get install -y jq curl fail2ban
+        apt-get install -y jq curl python3-pip python3-venv fail2ban
 
         # Install Docker from official repository for newer version
         log "Installing Docker from official repository..."
@@ -103,10 +103,10 @@ case $PKG_MANAGER in
         apt-get install -y gh
         ;;
     dnf)
-        dnf install -y docker jq curl fail2ban
+        dnf install -y docker jq curl python3-pip python3-venv fail2ban
         ;;
     yum)
-        yum install -y docker jq curl fail2ban
+        yum install -y docker jq curl python3-pip python3-venv fail2ban
         ;;
 esac
 
@@ -142,8 +142,9 @@ log "Disk space summary:"
 df -h | grep -E "(Filesystem|/$)" || true
 
 log "Checking fail2ban..."
-fail2ban-client status
-systemctl status fail2ban || true
+systemctl start fail2ban
+systemctl status fail2ban
+su - $RUNNER_USER -c "sudo fail2ban-client status"
 
 # Install and configure Docker
 log "Installing and configuring Docker..."
@@ -246,11 +247,10 @@ log "Starting post-job cleanup..."
 # Clean up Docker resources (this can be done as runner user)
 if command -v docker >/dev/null 2>&1; then
     log "Cleaning up Docker resources..."
-    # Remove unused containers, networks, images
-    docker system prune -f 2>/dev/null || true
+    # Remove all unused containers, networks, images, and volumes
+    docker system prune -a --volumes -f 2>/dev/null || true
     # Remove build cache
     docker builder prune -f 2>/dev/null || true
-    # Note: We don't prune volumes here as they might be in use
 fi
 
 # Clean up GitHub Actions workspace
@@ -356,18 +356,18 @@ if ! su - $RUNNER_USER -c "cd /home/$RUNNER_USER/actions-runner && ./config.sh -
 fi
 
 # Configure runner to run cleanup after each job using official hooks
-log "Configuring post-job cleanup using GitHub Actions hooks..."
+log "Configuring pre-job cleanup using GitHub Actions hooks..."
 
 # Create .env file in the runner directory to set the hook
 cat > /home/$RUNNER_USER/actions-runner/.env << EOF
 # GitHub Actions runner hooks
-ACTIONS_RUNNER_HOOK_JOB_COMPLETED=/usr/local/bin/runner-cleanup.sh
+ACTIONS_RUNNER_HOOK_JOB_STARTED=/usr/local/bin/runner-cleanup.sh
 EOF
 
 chown $RUNNER_USER:$RUNNER_USER /home/$RUNNER_USER/actions-runner/.env
 chmod 600 /home/$RUNNER_USER/actions-runner/.env
 
-log "Post-job cleanup configured using ACTIONS_RUNNER_HOOK_JOB_COMPLETED"
+log "Pre-job cleanup configured using ACTIONS_RUNNER_HOOK_JOB_STARTED"
 
 # Install runner service with sudo (required)
 log "Installing runner service..."
