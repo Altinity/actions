@@ -242,37 +242,68 @@ log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"
 }
 
-log "Starting post-job cleanup..."
+log "Starting pre-job cleanup..."
 
-# Clean up Docker resources (this can be done as runner user)
+# Clean up Docker resources
 if command -v docker >/dev/null 2>&1; then
     log "Cleaning up Docker resources..."
+
+    # Stop all running containers gracefully first
+    log "Stopping all running containers..."
+    docker stop $(docker ps -q) 2>/dev/null || true
+
+    # Kill any remaining containers
+    log "Killing any remaining containers..."
+    docker kill $(docker ps -q) 2>/dev/null || true
+
     # Remove all unused containers, networks, images, and volumes
-    docker system prune -a --volumes -f 2>/dev/null || true
+    log "Pruning Docker system..."
+    docker system prune -a --volumes -f 2>&1 || true
+    log "Docker system cleanup completed"
+
     # Remove build cache
-    docker builder prune -f 2>/dev/null || true
+    log "Pruning Docker build cache..."
+    docker builder prune -f 2>&1 || true
+    log "Docker build cache cleanup completed"
+
+    # Only restart Docker if it's not running or if there are issues
+    if ! systemctl is-active --quiet docker.service; then
+        log "Docker service is not active, attempting to start..."
+        sudo systemctl start docker.service 2>&1 || log "Warning: Failed to start Docker service"
+    fi
 fi
 
 # Clean up GitHub Actions workspace
-# The script runs in the security context of the runner service
-if [ -d "/home/ubuntu/actions-runner/_work" ]; then
-    log "Cleaning up GitHub Actions workspace..."
+if [ -n "$HOME" ] && [ -d "$HOME/actions-runner/_work" ]; then
+    WORKSPACE_DIR="$HOME/actions-runner/_work"
+    log "Cleaning up GitHub Actions workspace: $WORKSPACE_DIR"
 
-    # Find and remove _temp directories (these are safe to remove)
-    find /home/ubuntu/actions-runner/_work -type d -name "_temp" -exec rm -rf {} + 2>/dev/null || true
+    # Loop through directories in _work
+    for dir in $WORKSPACE_DIR/*; do
+        # Skip if not a directory
+        [ ! -d "$dir" ] && continue
 
-    # Find and remove _instances directories
-    # Use sudo for these as they have root ownership from Docker bind mounts
-    find /home/ubuntu/actions-runner/_work -type d -name "_instances" -exec sudo rm -rf {} + 2>/dev/null || true
+        # Skip special directories that start with _
+        [[ $(basename "$dir") == _* ]] && {
+            log "Skipping special directory: $(basename "$dir")"
+            continue
+        }
 
-    # Remove log files
-    find /home/ubuntu/actions-runner/_work -type f -name "*.log" -delete 2>/dev/null || true
+        # For repository directories, clean everything inside the second level
+        if [ -d "$dir" ]; then
+            log "Cleaning repository directory: $(basename "$dir")"
+            # Remove all files and directories recursively, handling permission issues
+            find "$dir" -mindepth 2 -exec sudo rm -rf {} + 2>/dev/null || true
+            # List remaining files after cleanup
+            log "Listing remaining files in $(basename "$dir"):"
+            find "$dir" -type f -ls 2>/dev/null || true
+            log "Finished cleaning $(basename "$dir")"
+        fi
+    done
 
-    # Remove any empty directories (but be careful not to remove the main structure)
-    find /home/ubuntu/actions-runner/_work -type d -empty -not -path "/home/ubuntu/actions-runner/_work" -delete 2>/dev/null || true
-
-    # Fix ownership of remaining files to ubuntu user
-    sudo chown -R ubuntu:ubuntu /home/ubuntu/actions-runner/_work 2>/dev/null || true
+    log "Workspace cleanup completed"
+else
+    log "Workspace directory not found or HOME not set. Skipping cleanup."
 fi
 
 # Clean up temporary files in user directories
@@ -284,10 +315,22 @@ rm -rf /var/tmp/* 2>/dev/null || true
 log "Cleaning up zram devices..."
 if command -v zramctl >/dev/null 2>&1; then
     # List all zram devices and reset them
-    zramctl list | awk 'NR>1 {print $1}' | while read device; do
+    zramctl | awk 'NR>1 {print $1 "\t" $8}' | while IFS=$'\t' read -r device mountpoint; do
         if [ -n "$device" ]; then
+            log "Processing zram device: $device"
+
+            # If device is mounted as swap, unmount it first
+            if [ "$mountpoint" = "[SWAP]" ]; then
+                log "Unmounting swap from zram device: $device"
+                sudo swapoff "$device" 2>&1 || log "Warning: Failed to unmount swap from $device"
+            elif [ -n "$mountpoint" ] && [ "$mountpoint" != "-" ]; then
+                log "Unmounting filesystem from zram device: $device"
+                sudo umount "$device" 2>&1 || log "Warning: Failed to unmount filesystem from $device"
+            fi
+
+            # Reset the device
             log "Resetting zram device: $device"
-            zramctl reset "$device" 2>/dev/null || true
+            zramctl reset "$device" 2>&1 || log "Warning: Failed to reset zram device $device"
         fi
     done
 fi
