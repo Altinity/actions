@@ -52,6 +52,7 @@ class DiffGenerator(GitCommandExecutor):
             ".github",
             "docker",
             "contrib",
+            "ci",
             "tests/ci",
             "tests/docker_scripts/",
             "tests/config/config.d/azure_storage_conf.xml",
