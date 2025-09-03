@@ -20,7 +20,6 @@ from lib.actions import Action
 
 Action.set_logger("rebase")
 
-
 class GitCommandExecutor:
     """Base class for git command execution."""
 
@@ -482,16 +481,22 @@ class RebaseManager(GitCommandExecutor):
                     "Working directory has uncommitted changes to tracked files. Please commit or stash them first."
                 )
 
-            result = self.execute_git_command(["rev-parse", "--abbrev-ref", "HEAD"])
-            current_branch = result[1].strip()
+            self._handle_remote("origin", self.fork_repo, action)
+            self._handle_remote("upstream", self.upstream_repo, action)
+
+            r = self.execute_git_command(["rev-parse", "--abbrev-ref", "HEAD"])
+            current_branch = r[1].strip()
             if current_branch != self.custom_branch:
                 action.note(
                     f"Switching from '{current_branch}' to '{self.custom_branch}'"
                 )
-                self.execute_git_command(["checkout", self.custom_branch])
-
-            self._handle_remote("origin", self.fork_repo, action)
-            self._handle_remote("upstream", self.upstream_repo, action)
+                self.execute_git_command(["fetch", "origin", self.custom_branch])
+                r = self.execute_git_command(["checkout", self.custom_branch])
+            if r[0] != 0:
+                raise ValueError(
+                    f"Failed to checkout branch '{self.custom_branch}': {r[2]}"
+                )
+            self.execute_git_command(["pull", "origin", self.custom_branch])
 
     def clone_repository(self) -> None:
         """Clone the fork repository if the directory is empty."""
@@ -645,7 +650,7 @@ def parse_args() -> argparse.Namespace:
         "--custom-branch", required=True, help="Your custom branch name (e.g. antalya)"
     )
     parser.add_argument(
-        "--output-branch", help="Output branch name (default: custom-branch-new-tag)"
+        "--output-branch", help="Output branch name (default: rebase-cicd-{new_tag})"
     )
     parser.add_argument(
         "--fork-repo",
@@ -670,7 +675,7 @@ def main() -> None:
         action.note(f"Base Upstream Tag: {args.base_tag}")
         action.note(f"Custom Branch: {args.custom_branch}")
         action.note(
-            f"Output Branch: {args.output_branch or f'{args.custom_branch}-{args.new_tag}'}"
+            f"Output Branch: {args.output_branch or f'rebase-cicd-{args.new_tag}'}"
         )
         action.note(f"Fork Repository: {args.fork_repo}")
         action.note(f"Work Directory: {args.work_dir}")
