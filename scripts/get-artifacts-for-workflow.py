@@ -1,9 +1,7 @@
 #! /usr/bin/env python3
 
 import argparse
-import json
 import os
-import platform
 
 import requests
 
@@ -43,16 +41,9 @@ def get_full_artifact_url(s3_base_url, pr_number, branch, commit_hash, artifact_
 
 
 def get_artifact_report_url(
-    workflow_config, s3_base_url, arch, pr_number, branch, commit_hash
+    workflow_config, s3_base_url, build_type, pr_number, branch, commit_hash
 ):
-    if arch == "x86_64":
-        build_type = "amd_release"
-        build_file = "build_amd_release/artifact_report_build_amd_release.json"
-    elif arch == "aarch64":
-        build_type = "arm_release"
-        build_file = "build_arm_release/artifact_report_build_arm_release.json"
-    else:
-        raise Exception("Only x86_64 and aarch64 are supported.")
+    build_file = f"build_{build_type}/artifact_report_build_{build_type}.json"
 
     cache_details = workflow_config["cache_artifacts"].get(f"Build ({build_type})")
     if cache_details and cache_details["type"] == "success":
@@ -104,12 +95,12 @@ def main():
     r.raise_for_status()
     workflow_config = r.json()
 
-    for arch in ["x86_64", "aarch64"]:
+    for build in ["amd_release", "arm_release"]:
         build_url = get_artifact_report_url(
-            workflow_config, S3_BASE_URL, arch, pr_number, branch_name, commit_sha
+            workflow_config, S3_BASE_URL, build, pr_number, branch_name, commit_sha
         )
         n_builds = len(requests.get(build_url).json().get("build_urls", []))
-        print(f"Found {n_builds} builds for {arch}: {build_url}")
+        print(f"Found {n_builds} builds for {build}: {build_url}")
 
 
 if __name__ == "__main__":
