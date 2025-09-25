@@ -8,8 +8,8 @@ import subprocess
 import re
 from pathlib import Path
 from typing import List, Tuple, Optional, Dict
-from urllib.parse import urlparse
 import shutil
+from fnmatch import fnmatch
 
 # Add the parent directory to Python path to find the lib module
 script_dir = Path(__file__).absolute()
@@ -66,13 +66,16 @@ class DiffGenerator(GitCommandExecutor):
             # These contain branding customizations
             "packages",
             "programs/server",
-            "tests/queries/0_stateless/01528_play",
+            "tests/queries/0_stateless/01528_play*",
             "utils/tests-visualizer",
         }
 
     def _is_ci_file(self, file_path: str) -> bool:
         """Check if the file is in one of the CI directories."""
-        return any(file_path.startswith(directory) for directory in self.ci_directories)
+        return any(
+            file_path.startswith(directory) or fnmatch(file_path, directory)
+            for directory in self.ci_directories
+        )
 
     def generate_diff(self, base_ref: str, target_ref: str, output_file: str) -> None:
         """Generate a diff between two git references."""
