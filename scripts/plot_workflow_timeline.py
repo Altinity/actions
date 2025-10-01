@@ -47,7 +47,7 @@ def main():
     if df.empty:
         raise SystemExit("No jobs with start/completion timestamps found for this run.")
 
-    df.sort_values("started_at", inplace=True)
+    df.sort_values("started_at", inplace=True, ascending=False)
 
     # ---------- Relative times ----------
     t0 = df["started_at"].min()
