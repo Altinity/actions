@@ -495,7 +495,9 @@ class RebaseManager(GitCommandExecutor):
                     f"Switching from '{current_branch}' to '{self.custom_branch}'"
                 )
                 self.execute_git_command(["fetch", "origin", self.custom_branch])
-                r = self.execute_git_command(["checkout", self.custom_branch])
+                r = self.execute_git_command(
+                    ["checkout", f"origin/{self.custom_branch}"]
+                )
             if r[0] != 0:
                 raise ValueError(
                     f"Failed to checkout branch '{self.custom_branch}': {r[2]}"
