@@ -40,10 +40,10 @@ class LeakScanner:
         self.bucket_name = bucket_name
         self.prefix = prefix
         self.pattern = re.compile(
-            pattern or r"[A-Z_]*(SECRET|PASSWORD|ACCESS_KEY|TOKEN)[A-Z_]*"
+            pattern or r"[A-Z_]*(SECRET|PASSWORD|KEY|TOKEN|AZURE)[A-Z_]*"
         )
         print(self.pattern)
-        exit()
+
         self.sensitive_strings = []
         self.matches = []
         self.continuation_token = None
@@ -64,8 +64,10 @@ class LeakScanner:
 
     def scan_env_vars(self):
         """Scan environment variables for sensitive strings."""
+        print("Will check files for the following secrets found in environment:")
         for var_name, var_value in os.environ.items():
             if self.pattern.match(var_name):
+                print(var_name)
                 self.sensitive_strings.append(var_value)
 
     def scan_file(self, file_content, file_name):
@@ -131,7 +133,13 @@ class LeakScanner:
                 if member.isfile():
                     f = tar.extractfile(member)
                     if f:
-                        file_content = f.read().decode("utf-8", errors="ignore")
+                        try:
+                            file_content = f.read().decode("utf-8", errors="ignore")
+                        except Exception as e:
+                            print(
+                                f"Error reading tar file {package_name}/{member.name}: {e}"
+                            )
+                            continue
                         matches.extend(
                             self.scan_file(
                                 file_content, f"{package_name}/{member.name}"
@@ -254,11 +262,13 @@ class LeakScanner:
                     Bucket=self.bucket_name, Prefix=self.prefix
                 )
 
-            for obj in response.get("Contents", []):
-                key = obj["Key"]
-                print(f"Scanning {key}...")
+            def get_and_scan_file(key):
                 file_obj = s3.get_object(Bucket=self.bucket_name, Key=key)
                 file_content = file_obj["Body"].read()
+                if len(file_content) > 100 * 1024 * 1024:
+                    # Can OOM when decompressing large files
+                    print(f"Large file, size: {len(file_content)} bytes, skipping...")
+                    return
 
                 for extension, scan_function in self.extension_to_scan_function.items():
                     if key.endswith(extension):
@@ -267,6 +277,15 @@ class LeakScanner:
                 else:
                     file_content = file_content.decode("utf-8", errors="ignore")
                     self.matches.extend(self.scan_file(file_content, key))
+
+            for obj in response.get("Contents", []):
+                key = obj["Key"]
+                print(f"Scanning {key}...")
+                try:
+                    get_and_scan_file(key)
+                except Exception as e:
+                    print(f"Error scanning {key}: {e}")
+                    continue
 
             if response.get("IsTruncated"):
                 self.continuation_token = response.get("NextContinuationToken")
