@@ -28,7 +28,7 @@ CI_DIRECTORIES = {
     "tests/ci",
     "tests/docker_scripts/",
     "tests/config/config.d/azure_storage_conf.xml",
-    "tests/broken_tests.json",
+    "tests/broken_tests.*",
     # We need to include tweaks to the test runner and update some hardcoded docker image names.
     # Note to user: do not carry forward custom integration tests at this stage.
     "tests/integration/",
@@ -38,7 +38,8 @@ CI_DIRECTORIES = {
     "src/Common/SignalHandlers.cpp",
     # These contain branding customizations
     "packages",
-    "programs/server",
+    "programs/server/*.html",
+    "programs/server/config.xml",
     "tests/queries/0_stateless/01528_play*",
     "utils/tests-visualizer",
 }
@@ -502,7 +503,11 @@ class RebaseManager(GitCommandExecutor):
                 raise ValueError(
                     f"Failed to checkout branch '{self.custom_branch}': {r[2]}"
                 )
-            self.execute_git_command(["pull", "origin", self.custom_branch])
+            r = self.execute_git_command(["pull", "origin", self.custom_branch])
+            if r[0] != 0:
+                raise ValueError(
+                    f"Failed to pull branch '{self.custom_branch}': {r[2]}"
+                )
 
     def clone_repository(self) -> None:
         """Clone the fork repository if the directory is empty."""
