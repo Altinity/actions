@@ -39,7 +39,8 @@ CI_DIRECTORIES = {
     # These contain branding customizations
     "packages",
     "programs/server/*.html",
-    "programs/server/config.xml",
+    "programs/server/*.xml",
+    "programs/server/config.yaml.example",
     "tests/queries/0_stateless/01528_play*",
     "utils/tests-visualizer",
 }
