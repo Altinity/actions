@@ -30,6 +30,7 @@ CI_DIRECTORIES = {
     "tests/ci",
     "tests/docker_scripts/",
     "tests/config/config.d/azure_storage_conf.xml",
+    "tests/config/install.sh",
     "tests/broken_tests.*",
     # We need to include tweaks to the test runner and update some hardcoded docker image names.
     # Note to user: do not carry forward custom integration tests at this stage.
@@ -45,8 +46,14 @@ CI_DIRECTORIES = {
     "programs/server/*.html",
     "programs/server/*.xml",
     "programs/server/config.yaml.example",
+    "programs/client/Client.cpp",
     "tests/queries/0_stateless/01528_play*",
+    "tests/queries/0_stateless/03362_basic_auth_interactive_not_with_authorization_never.reference",
+    "tests/queries/0_stateless/03362_basic_auth_interactive_not_with_authorization_never.sh",
     "utils/tests-visualizer",
+    "src/Access/AccessControl.cpp",
+    "src/Client/CloudJWTProvider.cpp",
+    "src/Core/Settings.cpp",
 }
 
 class GitCommandExecutor:
@@ -553,7 +560,9 @@ class RebaseManager(GitCommandExecutor):
     def generate_custom_base_diff(self) -> None:
         """Generate per-file diffs between custom branch and base tag."""
         self.diff_generator.generate_per_file_diffs(
-            f"refs/tags/{self.upstream_base_tag}", self.custom_branch, prefix="custom_"
+            f"refs/tags/{self.upstream_base_tag}",
+            f"origin/{self.custom_branch}",
+            prefix="custom_",
         )
 
     def generate_upstream_base_diff(self) -> None:
@@ -766,12 +775,13 @@ def main() -> None:
                 )
                 action.note("3. After resolving all conflicts, commit your changes:")
 
-            action.note(f"   git add {' '.join(CI_DIRECTORIES)}")
-            action.note(f"   git commit -m 'Rebase CICD on {args.new_tag}'")
             action.note(f"Current branch: {new_branch}")
         else:
             action.note("All changes applied successfully!")
-            action.note(f"New branch created: {new_branch}")
+
+        action.note(f"New branch created: {new_branch}")
+        action.note(f"   git add {' '.join(CI_DIRECTORIES)}")
+        action.note(f"   git commit -m 'Rebase CICD on {args.new_tag}'")
 
 
 if __name__ == "__main__":
