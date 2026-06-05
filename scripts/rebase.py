@@ -42,7 +42,9 @@ CI_DIRECTORIES = {
     "src/Common/SignalHandlers.cpp",
     # These contain branding customizations
     "*.md",
+    # "docs/logo_*",
     "packages",
+    "programs/keeper/dashboard.html",
     "programs/server/*.html",
     "programs/server/*.xml",
     "programs/server/config.yaml.example",
@@ -50,6 +52,8 @@ CI_DIRECTORIES = {
     "tests/queries/0_stateless/01528_play*",
     "tests/queries/0_stateless/03362_basic_auth_interactive_not_with_authorization_never.reference",
     "tests/queries/0_stateless/03362_basic_auth_interactive_not_with_authorization_never.sh",
+    "tests/queries/0_stateless/02116_interactive_hello.expect",
+    "tests/queries/0_stateless/03272_client_highlighting_bug.expect",
     "utils/tests-visualizer",
     "src/Access/AccessControl.cpp",
     "src/Client/CloudJWTProvider.cpp",
